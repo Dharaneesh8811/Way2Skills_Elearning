@@ -146,13 +146,13 @@ export default function Navbar() {
             ))}
 
             <div className="mt-2 flex flex-col gap-2 border-t border-slate-100 pt-2">
-              <Link
+              {/* <Link
                 href="/login"
                 onClick={() => setMenuOpen(false)}
                 className="flex min-h-[44px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm font-semibold text-slate-800 transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
               >
                 Login
-              </Link>
+              </Link> */}
               <Link
                 href="/admissions"
                 onClick={() => setMenuOpen(false)}
