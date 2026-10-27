@@ -48,7 +48,7 @@ export default function Navbar() {
     >
       <nav
         aria-label="Main navigation"
-        className="flex items-center justify-between rounded-full border border-white/40 bg-white/40 px-4 py-2 shadow-sm backdrop-blur-xl transition-all duration-300 sm:px-7 sm:py-2.5 lg:px-9"
+        className="flex items-center justify-between rounded-full border border-white/40 bg-white/80 px-4 py-2 shadow-sm backdrop-blur-xl transition-all duration-300 sm:px-7 sm:py-2.5 lg:px-9"
       >
         <Link
           href="/"

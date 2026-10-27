@@ -1,6 +1,13 @@
 "use client";
 
-import { useRef, useState, type ChangeEvent, type FocusEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FocusEvent,
+  type FormEvent,
+} from "react";
 import {
   createFormSubmissionId,
   submitWay2SkillsForm,
@@ -16,6 +23,7 @@ import {
   validateAdmissionMessage,
   VALID_EDUCATION_LEVELS,
 } from "@/lib/formValidation";
+import { courseRequest, type Course } from "@/lib/coursesApi";
 
 type AdmissionFormData = {
   name: string;
@@ -31,12 +39,15 @@ const initialFormData: AdmissionFormData = {
   email: "",
   phone: "",
   education: "",
-  course: "full-stack-development",
+  course: "",
   message: "",
 };
 
 export default function AdmissionForm() {
   const [formData, setFormData] = useState<AdmissionFormData>(initialFormData);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [courseLoading, setCourseLoading] = useState(true);
+  const [courseLoadError, setCourseLoadError] = useState<string | null>(null);
   const [touched, setTouched] = useState<Record<keyof AdmissionFormData, boolean>>({
     name: false,
     email: false,
@@ -53,13 +64,54 @@ export default function AdmissionForm() {
   const isSubmitting = useRef(false);
   const submissionId = useRef<string | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      courseRequest<Course[]>("/api/courses"),
+      courseRequest<Course[]>("/api/programmes"),
+    ])
+      .then(([courseItems, programmeItems]) => {
+        if (!active) return;
+        const availableCourses = [...courseItems, ...programmeItems];
+        setCourses(availableCourses);
+        const requestedSlug = new URLSearchParams(window.location.search).get("course");
+        if (requestedSlug && availableCourses.some((item) => item.slug === requestedSlug)) {
+          setFormData((previous) => ({ ...previous, course: requestedSlug }));
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (active) {
+          setCourseLoadError(
+            requestError instanceof Error
+              ? requestError.message
+              : "Available programmes could not be loaded."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setCourseLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Compute live validation errors
+  const selectedCourseIsAvailable = courses.some(
+    (course) => course.slug === formData.course
+  );
   const errors = {
     name: validateName(formData.name),
     email: validateEmail(formData.email),
     phone: validatePhone(formData.phone),
     education: validateEducation(formData.education),
-    course: validateCourse(formData.course),
+    course:
+      validateCourse(formData.course) ??
+      (selectedCourseIsAvailable
+        ? null
+        : courses.length === 0
+          ? "No published courses or programmes are available."
+          : "Please select an available course or programme."),
     message: validateAdmissionMessage(formData.message),
   };
 
@@ -384,13 +436,24 @@ export default function AdmissionForm() {
             }
             className={`${getInputClassName("course")} [color-scheme:dark]`}
           >
-            <option
-              value="full-stack-development"
-              className="bg-[#24344f] text-white"
-            >
-              Full Stack Development
-            </option>
-          </select>
+              <option value="" disabled className="bg-[#24344f] text-white/50">
+                {courseLoading ? "Loading courses..." : "Select a course"}
+              </option>
+              {courses.map((course) => (
+                <option
+                  className="bg-[#24344f] text-white"
+                  key={course.id}
+                  value={course.slug}
+                >
+                  {course.title}
+                </option>
+              ))}
+            </select>
+            {courseLoadError && (
+              <p className="mt-1.5 text-xs font-medium text-amber-200" role="status">
+                Course options could not be loaded. Please try again later.
+              </p>
+            )}
           {touched.course && errors.course && (
             <p
               id="admission-course-error"
@@ -402,7 +465,9 @@ export default function AdmissionForm() {
           )}
 
           <p className="mt-2 text-[11px] leading-5 text-white/40">
-            More programmes can be added when they become available.
+            {courseLoading
+              ? "Loading published courses and programmes..."
+              : "Choose from currently published courses and programmes."}
           </p>
         </div>
 
