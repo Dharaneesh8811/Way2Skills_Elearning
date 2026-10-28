@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from app.models.admission import Admission
 from app.models.course import Course
+from app.models.course_category import CourseCategory
 from app.models.enums import CourseCertificate
 
 COURSE = {
@@ -28,6 +29,102 @@ def test_admin_course_routes_require_authentication(client):
     test_client, _ = client
     assert test_client.get("/api/admin/courses").status_code == 401
     assert test_client.post("/api/admin/courses", json=COURSE).status_code == 401
+    assert test_client.get("/api/admin/categories").status_code == 401
+    assert test_client.delete(
+        "/api/admin/categories", params={"name": "Development"}
+    ).status_code == 401
+
+
+def test_deleting_category_keeps_courses_and_all_course_data(client, auth_headers):
+    test_client, testing_session = client
+    payloads = [
+        {
+            **COURSE,
+            "title": f"Category course {index}",
+            "slug": f"category-course-{index}",
+            "category": "Frontend",
+            "image_url": f"https://images.example.org/course-{index}.jpg",
+            "price": "1299.50",
+            "curriculum": "Module 1\nModule 2",
+            "benefits": "Benefit one\nBenefit two",
+            "certificates": [CourseCertificate.COURSE_COMPLETION.value],
+        }
+        for index in range(3)
+    ]
+    created_courses = [
+        test_client.post(
+            "/api/admin/courses", json=payload, headers=auth_headers
+        ).json()
+        for payload in payloads
+    ]
+    unrelated = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "title": "Backend course", "slug": "backend-course", "category": "Backend"},
+        headers=auth_headers,
+    )
+    assert unrelated.status_code == 201
+
+    before = test_client.get(
+        "/api/admin/categories", headers=auth_headers
+    ).json()
+    assert {item["name"]: item["course_count"] for item in before} == {
+        "Backend": 1,
+        "Frontend": 3,
+    }
+
+    deleted = test_client.delete(
+        "/api/admin/categories",
+        params={"name": "Frontend"},
+        headers=auth_headers,
+    )
+    assert deleted.status_code == 204
+    assert [item["name"] for item in test_client.get(
+        "/api/admin/categories", headers=auth_headers
+    ).json()] == ["Backend"]
+    unavailable_assignment = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "title": "New frontend course", "slug": "new-frontend-course", "category": "Frontend"},
+        headers=auth_headers,
+    )
+    assert unavailable_assignment.status_code == 409
+    reassignment_to_deleted = test_client.patch(
+        f"/api/admin/courses/{unrelated.json()['id']}",
+        json={"category": "Frontend"},
+        headers=auth_headers,
+    )
+    assert reassignment_to_deleted.status_code == 409
+
+    for created in created_courses:
+        retained = test_client.get(
+            f"/api/admin/courses/{created['id']}", headers=auth_headers
+        )
+        assert retained.status_code == 200
+        course = retained.json()
+        assert course["category"] == "Frontend"
+        assert course["image_url"] == created["image_url"]
+        assert course["price"] == created["price"]
+        assert course["curriculum"] == created["curriculum"]
+        assert course["benefits"] == created["benefits"]
+        assert course["certificates"] == created["certificates"]
+
+    edited = test_client.patch(
+        f"/api/admin/courses/{created_courses[0]['id']}",
+        json={"short_description": "Updated without changing legacy category."},
+        headers=auth_headers,
+    )
+    assert edited.status_code == 200
+    assert edited.json()["category"] == "Frontend"
+    assert test_client.get(
+        "/api/admin/categories", headers=auth_headers
+    ).json() == [{"name": "Backend", "course_count": 1}]
+
+    with testing_session() as session:
+        assert session.scalar(
+            select(CourseCategory).where(CourseCategory.name == "Frontend")
+        ).is_active is False
+        assert session.scalar(
+            select(Course).where(Course.category == "Frontend")
+        ) is not None
 
 
 def test_course_create_update_publish_and_public_listing(client, auth_headers):
@@ -119,6 +216,116 @@ def test_course_details_optional_price_image_and_certificates_persist(
         assert stored.certificates == [
             CourseCertificate.INTERNSHIP_COMPLETION.value
         ]
+
+
+def test_course_content_limits_accept_maximum_and_reject_excess(client, auth_headers):
+    test_client, testing_session = client
+    valid_payload = {
+        **COURSE,
+        "slug": "content-limits",
+        "short_description": "x" * 100,
+        "full_description": " ".join(
+            ["full description remains independent."] * 20
+        ),
+        "curriculum": "Line one\n\nLine two\nLine three\n\nLine four",
+        "benefits": "Benefit one\n\nBenefit two\nBenefit three\n\nBenefit four\nBenefit five",
+    }
+
+    created = test_client.post(
+        "/api/admin/courses", json=valid_payload, headers=auth_headers
+    )
+    assert created.status_code == 201
+    assert created.json()["short_description"] == valid_payload["short_description"]
+    assert created.json()["full_description"] == valid_payload["full_description"]
+    assert created.json()["curriculum"] == valid_payload["curriculum"]
+    assert created.json()["benefits"] == valid_payload["benefits"]
+
+    course_id = created.json()["id"]
+    valid_update = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={
+            "short_description": "y" * 100,
+            "curriculum": "One\n\nTwo\n\nThree\n\nFour",
+            "benefits": "One\n\nTwo\n\nThree\n\nFour\n\nFive",
+        },
+        headers=auth_headers,
+    )
+    assert valid_update.status_code == 200
+    assert len(valid_update.json()["short_description"]) == 100
+
+    too_many_characters = test_client.post(
+        "/api/admin/courses",
+        json={
+            **valid_payload,
+            "slug": "too-many-characters",
+            "short_description": "x" * 101,
+        },
+        headers=auth_headers,
+    )
+    too_many_curriculum_lines = test_client.post(
+        "/api/admin/courses",
+        json={
+            **valid_payload,
+            "slug": "too-many-curriculum-lines",
+            "curriculum": "One\n\nTwo\n\nThree\n\nFour\n\nFive",
+        },
+        headers=auth_headers,
+    )
+    too_many_benefit_lines = test_client.post(
+        "/api/admin/courses",
+        json={
+            **valid_payload,
+            "slug": "too-many-benefit-lines",
+            "benefits": "One\n\nTwo\n\nThree\n\nFour\n\nFive\n\nSix",
+        },
+        headers=auth_headers,
+    )
+    assert too_many_characters.status_code == 422
+    assert too_many_curriculum_lines.status_code == 422
+    assert too_many_benefit_lines.status_code == 422
+    assert any(
+        error["msg"] == "Value error, Short description must contain no more than 100 characters"
+        for error in too_many_characters.json()["errors"]
+    )
+    assert any(
+        error["msg"] == "Value error, Curriculum Overview must contain no more than 4 non-empty lines"
+        for error in too_many_curriculum_lines.json()["errors"]
+    )
+    assert any(
+        error["msg"] == "Value error, Benefits must contain no more than 5 non-empty lines"
+        for error in too_many_benefit_lines.json()["errors"]
+    )
+
+    invalid_updates = (
+        {"short_description": "x" * 101},
+        {"curriculum": "One\n\nTwo\n\nThree\n\nFour\n\nFive"},
+        {"benefits": "One\n\nTwo\n\nThree\n\nFour\n\nFive\n\nSix"},
+    )
+    for update in invalid_updates:
+        response = test_client.patch(
+            f"/api/admin/courses/{course_id}",
+            json=update,
+            headers=auth_headers,
+        )
+        assert response.status_code == 422
+
+    with testing_session() as session:
+        stored = session.scalar(select(Course).where(Course.id == UUID(course_id)))
+        assert stored is not None
+        stored.short_description = "l" * 121
+        stored.curriculum = "One\nTwo\nThree\nFour\nFive"
+        stored.benefits = "One\nTwo\nThree\nFour\nFive\nSix"
+        session.commit()
+
+    unrelated_update = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"title": "Edited without changing legacy content"},
+        headers=auth_headers,
+    )
+    assert unrelated_update.status_code == 200
+    assert unrelated_update.json()["short_description"] == "l" * 121
+    assert unrelated_update.json()["curriculum"] == "One\nTwo\nThree\nFour\nFive"
+    assert unrelated_update.json()["benefits"] == "One\nTwo\nThree\nFour\nFive\nSix"
 
 
 def test_course_price_can_be_cleared_and_level_and_certificates_are_validated(

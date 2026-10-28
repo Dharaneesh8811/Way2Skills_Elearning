@@ -45,6 +45,11 @@ export type CoursePage = {
   offset: number;
 };
 
+export type CourseCategory = {
+  name: string;
+  course_count: number;
+};
+
 const API_URL =
   process.env.NEXT_PUBLIC_WAY2SKILLS_API_URL?.trim().replace(/\/+$/, "") ?? "";
 

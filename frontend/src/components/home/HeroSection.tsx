@@ -31,7 +31,7 @@ export default function HeroSection() {
               <span className="hero-word-track">
                 <span >Reality.</span>
                 <span className="text-black">Action.</span>
-                <span >Tomorrow.</span>
+                <span className="text-blue">Tomorrow.</span>
                 <span className="text-black">Next Level.</span>
                 <span >Reality.</span>
               </span>

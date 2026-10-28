@@ -5,12 +5,31 @@ from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import CourseCertificate, CourseLevel, CourseTheme, CourseType
 from app.schemas.common import APIModel, ORMModel
 
 Slug = Annotated[str, Field(min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+
+
+def _validate_short_description(value: str | None) -> None:
+    if value is not None and len(value) > 100:
+        raise ValueError("Short description must contain no more than 100 characters")
+
+
+def _validate_content_lines(
+    value: str | None, field_name: str, maximum: int
+) -> str | None:
+    if value is not None:
+        line_count = sum(
+            bool(line.strip()) for line in re.split(r"\r?\n", value)
+        )
+        if line_count > maximum:
+            raise ValueError(
+                f"{field_name} must contain no more than {maximum} non-empty lines"
+            )
+    return value
 
 
 def _validate_course_fields(data: dict[str, object]) -> dict[str, object]:
@@ -36,7 +55,7 @@ def _validate_course_fields(data: dict[str, object]) -> dict[str, object]:
 class CourseCreate(APIModel):
     title: str = Field(min_length=2, max_length=160)
     slug: Slug
-    short_description: str = Field(min_length=1, max_length=300)
+    short_description: str = Field(min_length=1, max_length=10000)
     full_description: str = Field(min_length=1, max_length=10000)
     category: str = Field(min_length=1, max_length=80)
     course_type: CourseType
@@ -53,6 +72,22 @@ class CourseCreate(APIModel):
     is_published: bool = False
     is_featured: bool = False
     display_order: int = Field(default=0, ge=0, le=100000)
+
+    @field_validator("short_description")
+    @classmethod
+    def validate_short_description(cls, value: str) -> str:
+        _validate_short_description(value)
+        return value
+
+    @field_validator("curriculum")
+    @classmethod
+    def validate_curriculum_lines(cls, value: str | None) -> str | None:
+        return _validate_content_lines(value, "Curriculum Overview", 4)
+
+    @field_validator("benefits")
+    @classmethod
+    def validate_benefit_lines(cls, value: str | None) -> str | None:
+        return _validate_content_lines(value, "Benefits", 5)
 
     @model_validator(mode="after")
     def validate_fields(self) -> "CourseCreate":
@@ -71,7 +106,7 @@ class CourseCreate(APIModel):
 class CourseUpdate(APIModel):
     title: str | None = Field(default=None, min_length=2, max_length=160)
     slug: Slug | None = None
-    short_description: str | None = Field(default=None, min_length=1, max_length=300)
+    short_description: str | None = Field(default=None, min_length=1, max_length=10000)
     full_description: str | None = Field(default=None, min_length=1, max_length=10000)
     category: str | None = Field(default=None, min_length=1, max_length=80)
     course_type: CourseType | None = None
@@ -88,6 +123,22 @@ class CourseUpdate(APIModel):
     is_published: bool | None = None
     is_featured: bool | None = None
     display_order: int | None = Field(default=None, ge=0, le=100000)
+
+    @field_validator("short_description")
+    @classmethod
+    def validate_short_description(cls, value: str | None) -> str | None:
+        _validate_short_description(value)
+        return value
+
+    @field_validator("curriculum")
+    @classmethod
+    def validate_curriculum_lines(cls, value: str | None) -> str | None:
+        return _validate_content_lines(value, "Curriculum Overview", 4)
+
+    @field_validator("benefits")
+    @classmethod
+    def validate_benefit_lines(cls, value: str | None) -> str | None:
+        return _validate_content_lines(value, "Benefits", 5)
 
     @model_validator(mode="after")
     def validate_fields(self) -> "CourseUpdate":

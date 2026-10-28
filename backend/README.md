@@ -104,7 +104,10 @@ alembic upgrade head
 ```
 
 `alembic upgrade head` applies the foundation, course, UUID, feedback, and
-course-details migrations.
+course-details migrations, followed by the archiveable course-category
+registry and the course-content limits migration. The category migration copies
+existing distinct category names into the registry; it does not modify or
+delete course rows.
 The UUID migration assigns UUID primary keys to admins, contacts, admissions,
 and courses while retaining each existing integer ID in a unique `legacy_id`
 column. Existing rows and their data are preserved; legacy integer record URLs
@@ -114,6 +117,13 @@ the default. It does not alter or remove existing tables or records.
 The course-details migration adds nullable curriculum and benefits fields and a
 JSON certificate-selection field defaulting to an empty list. Existing course
 prices, image URLs, and other data are preserved.
+The course-category migration creates a category registry for admin-managed
+availability. Archiving a category leaves each course's saved category text and
+all course data unchanged.
+The course-content limits migration changes the short description column from
+`VARCHAR(300)` to `TEXT`; this preserves existing content and accommodates
+future description limit changes.
+Existing description content is preserved.
 
 ## 6. Create the first administrator
 
@@ -181,6 +191,8 @@ All API routes are under `/api`:
 | `GET` | `/admin/courses/{id}` | Admin JWT | Retrieve a course for editing |
 | `PATCH` | `/admin/courses/{id}` | Admin JWT | Edit or publish/unpublish a course |
 | `DELETE` | `/admin/courses/{id}` | Admin JWT | Delete if no admission references it |
+| `GET` | `/admin/categories` | Admin JWT | List available course categories and their course counts |
+| `DELETE` | `/admin/categories?name={name}` | Admin JWT | Archive a category without changing its courses |
 | `GET` | `/admin/feedback` | Admin JWT | List all feedback submissions |
 | `PATCH` | `/admin/feedback/{id}` | Admin JWT | Approve or reject submitted feedback |
 | `DELETE` | `/admin/feedback/{id}` | Admin JWT | Delete a feedback submission |

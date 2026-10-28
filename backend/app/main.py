@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
                 "errors": [
                     {
                         "loc": list(error["loc"]),
-                        "msg": "Invalid value",
+                        "msg": error["msg"],
                         "type": error["type"],
                     }
                     for error in exc.errors()

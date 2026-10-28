@@ -40,13 +40,16 @@ export default function FeaturedCourse() {
     () => ["All", ...new Set(courses.map((course) => course.category))],
     [courses]
   );
+  
   const visibleCourses = useMemo(
     () =>
-      activeCategory === "All"
+      (activeCategory === "All"
         ? courses
-        : courses.filter((course) => course.category === activeCategory),
+        : courses.filter((course) => course.category === activeCategory)
+      ).slice(0, 6),
     [activeCategory, courses]
   );
+
 
   return (
     <section
@@ -68,7 +71,7 @@ export default function FeaturedCourse() {
           </div>
           {!loading && !error && (
             <span className="w-fit rounded-full border border-sky-200 bg-white/60 px-3.5 py-1.5 text-xs font-semibold text-sky-900 sm:px-4 sm:py-2">
-              {courses.length} Published {courses.length === 1 ? "Programme" : "Programmes"}
+              Showing {Math.min(visibleCourses.length, 6)} of {courses.length} Published Courses & Programmes
             </span>
           )}
         </header>
@@ -113,21 +116,35 @@ export default function FeaturedCourse() {
               ? "No published courses are available yet."
               : "No courses are available in this category."}
           </p>
+        
         ) : (
-          <div
-            id="featured-courses"
-            className="mt-8 grid min-w-0 grid-cols-1 justify-items-center gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3"
-          >
-            {visibleCourses.map((course) => (
-              <CourseCard
-                course={course}
-                index={courses.findIndex((item) => item.id === course.id)}
-                key={course.id}
-              />
-            ))}
-          </div>
+          <>
+            <div
+              id="featured-courses"
+              className="mt-8 grid min-w-0 grid-cols-1 justify-items-center gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3"
+            >
+              {visibleCourses.map((course) => (
+                <CourseCard
+                  course={course}
+                  index={courses.findIndex((item) => item.id === course.id)}
+                  key={course.id}
+                />
+              ))}
+            </div>
+
+            <div className="mt-10 flex justify-center">
+              <a
+                href="/courses"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-sky-700 bg-blue-700 px-7 py-3 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:border-sky-800 hover:bg-sky-800 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-700 focus-visible:ring-offset-2"
+              >
+                View All Courses
+                <span aria-hidden="true">→</span>
+              </a>
+            </div>
+          </>
         )}
       </div>
     </section>
   );
 }
+

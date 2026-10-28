@@ -11,8 +11,10 @@ import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
+  FolderOpen,
   Plus,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -20,6 +22,7 @@ import {
   courseRequest,
   type CourseCertificate,
   type Course,
+  type CourseCategory,
   type CoursePage,
   type CourseTheme,
   type CourseType,
@@ -27,7 +30,7 @@ import {
 import CourseImage from "@/components/courses/CourseImage";
 
 const PAGE_SIZE = 10;
-const DELIVERY_MODES = ["Online", "Offline", "Both"] as const;
+const DELIVERY_MODES = ["Online", "Offline", "Flexible"] as const;
 const COURSE_LEVELS = ["Beginner", "Intermediate", "Advanced"] as const;
 
 type CourseDraft = {
@@ -42,7 +45,6 @@ type CourseDraft = {
   delivery_mode: string;
   image_url: string;
   price: string;
-  curriculum: string;
   benefits: string;
   certificates: CourseCertificate[];
   card_theme: CourseTheme | "";
@@ -50,6 +52,11 @@ type CourseDraft = {
   is_featured: boolean;
   display_order: number;
 };
+
+type EditableCourseContent = Pick<
+  CourseDraft,
+  "short_description" | "benefits"
+>;
 
 const emptyDraft: CourseDraft = {
   title: "",
@@ -63,7 +70,6 @@ const emptyDraft: CourseDraft = {
   delivery_mode: "Online",
   image_url: "",
   price: "",
-  curriculum: "",
   benefits: "",
   certificates: [],
   card_theme: "sky",
@@ -71,6 +77,29 @@ const emptyDraft: CourseDraft = {
   is_featured: false,
   display_order: 0,
 };
+
+const emptyEditableContent: EditableCourseContent = {
+  short_description: "",
+  benefits: "",
+};
+
+function countCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+function countContentLines(value: string): number {
+  return value.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+}
+
+function slugFromTitle(title: string): string {
+  const slug = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return slug.length >= 2 ? slug : "offering";
+}
 
 function fromCourse(course: Course): CourseDraft {
   return {
@@ -85,14 +114,6 @@ function fromCourse(course: Course): CourseDraft {
     delivery_mode: course.delivery_mode,
     image_url: course.image_url ?? "",
     price: course.price ?? "",
-    curriculum: [
-      ...(course.curriculum?.trim() ? [course.curriculum.trim()] : []),
-      ...course.syllabus.filter(
-        (item) => !course.curriculum?.split(/\r?\n/).some(
-          (line) => line.trim() === item.trim()
-        )
-      ),
-    ].join("\n"),
     benefits: course.benefits ?? "",
     certificates: course.certificates ?? [],
     card_theme: course.card_theme ?? "",
@@ -114,6 +135,9 @@ function canonicalLevel(level: string): string {
 
 export default function CourseManagement({ token }: { token: string }) {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [categories, setCategories] = useState<CourseCategory[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
@@ -124,16 +148,45 @@ export default function CourseManagement({ token }: { token: string }) {
   const [draft, setDraft] = useState<CourseDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [originalLevel, setOriginalLevel] = useState("");
+  const [originalCategory, setOriginalCategory] = useState("");
+  const [originalEditableContent, setOriginalEditableContent] =
+    useState<EditableCourseContent>(emptyEditableContent);
   const [levelChanged, setLevelChanged] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingCategory, setDeletingCategory] = useState<string | null>(null);
+  const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const previousBodyOverflow = useRef("");
+  const categoryDeletePending = useRef(false);
+
+  const loadCategories = useCallback(async (signal?: AbortSignal) => {
+    setCategoriesLoading(true);
+    setCategoriesError(null);
+    try {
+      const availableCategories = await courseRequest<CourseCategory[]>(
+        "/api/admin/categories",
+        token,
+        { signal }
+      );
+      if (!signal?.aborted) setCategories(availableCategories);
+    } catch (requestError) {
+      if (!signal?.aborted) setCategoriesError(messageFrom(requestError));
+    } finally {
+      if (!signal?.aborted) setCategoriesLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadCategories(controller.signal);
+    return () => controller.abort();
+  }, [loadCategories]);
 
   const loadCourses = useCallback(async (
     requestedOffset = offset,
@@ -206,6 +259,8 @@ export default function CourseManagement({ token }: { token: string }) {
   function resetEditor() {
     setEditingId(null);
     setOriginalLevel("");
+    setOriginalCategory("");
+    setOriginalEditableContent(emptyEditableContent);
     setLevelChanged(false);
     setDraft(emptyDraft);
     setCustomCategory(false);
@@ -216,21 +271,41 @@ export default function CourseManagement({ token }: { token: string }) {
   async function saveCourse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const wasEditing = editingId !== null;
+    const shortDescriptionChanged =
+      !wasEditing ||
+      draft.short_description !== originalEditableContent.short_description;
+    const benefitsChanged =
+      !wasEditing || draft.benefits !== originalEditableContent.benefits;
+
+    if (shortDescriptionChanged && countCharacters(draft.short_description) > 100) {
+      setFormError("Short description must be no more than 100 characters.");
+      return;
+    }
+    if (benefitsChanged && countContentLines(draft.benefits) > 5) {
+      setFormError("Benefits must contain no more than 5 non-empty lines.");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setFormError(null);
     setNotice(null);
     const payload = {
       ...draft,
+      slug: editingId ? draft.slug : slugFromTitle(draft.title),
       ...(editingId && !levelChanged ? { level: undefined } : {}),
+      ...(editingId && draft.category === originalCategory
+        ? { category: undefined }
+        : {}),
+      ...(editingId && !shortDescriptionChanged
+        ? { short_description: undefined }
+        : {}),
+      ...(editingId && !benefitsChanged ? { benefits: undefined } : {}),
       image_url: draft.image_url.trim() || null,
       price: draft.price.trim() ? Number(draft.price) : null,
-      curriculum: draft.curriculum.trim() ? draft.curriculum : null,
-      benefits: draft.benefits.trim() ? draft.benefits : null,
-      syllabus: draft.curriculum
-        .split("\n")
-        .map((item) => item.trim())
-        .filter(Boolean),
+      ...(editingId && !benefitsChanged
+        ? { benefits: undefined }
+        : { benefits: draft.benefits.trim() ? draft.benefits : null }),
       card_theme: draft.card_theme || null,
     };
     try {
@@ -249,6 +324,7 @@ export default function CourseManagement({ token }: { token: string }) {
       const nextOffset = wasEditing ? offset : 0;
       if (!wasEditing) setOffset(0);
       await loadCourses(nextOffset);
+      await loadCategories();
     } catch (requestError) {
       setFormError(messageFrom(requestError));
     } finally {
@@ -286,6 +362,7 @@ export default function CourseManagement({ token }: { token: string }) {
       setNotice("Course deleted.");
       if (editingId === course.id) resetEditor();
       await loadCourses();
+      await loadCategories();
     } catch (requestError) {
       setError(messageFrom(requestError));
     } finally {
@@ -293,13 +370,60 @@ export default function CourseManagement({ token }: { token: string }) {
     }
   }
 
+  async function deleteCategory(category: CourseCategory) {
+    if (categoryDeletePending.current) return;
+    const courseLabel = `${category.course_count} ${
+      category.course_count === 1 ? "course" : "courses"
+    }`;
+    if (
+      !window.confirm(
+        `Delete "${category.name}"? ${courseLabel} will be retained with all saved details. The category will no longer be available for new assignments.`
+      )
+    ) {
+      return;
+    }
+
+    categoryDeletePending.current = true;
+    setDeletingCategory(category.name);
+    setError(null);
+    setNotice(null);
+    try {
+      await courseRequest<void>(
+        `/api/admin/categories?name=${encodeURIComponent(category.name)}`,
+        token,
+        { method: "DELETE" }
+      );
+      setNotice(
+        `Category "${category.name}" deleted. ${courseLabel} and their details were retained.`
+      );
+      await loadCategories();
+      if (categoryFilter === category.name) {
+        setCategoryFilter("");
+        setOffset(0);
+      } else {
+        await loadCourses(0);
+      }
+    } catch (requestError) {
+      setError(messageFrom(requestError));
+    } finally {
+      categoryDeletePending.current = false;
+      setDeletingCategory(null);
+    }
+  }
+
   function editCourse(course: Course) {
     setEditingId(course.id);
     setOriginalLevel(course.level);
+    setOriginalCategory(course.category);
+    const courseDraft = fromCourse(course);
+    setOriginalEditableContent({
+      short_description: courseDraft.short_description,
+      benefits: courseDraft.benefits,
+    });
     setLevelChanged(false);
     setEditorOpen(true);
-    setDraft({ ...fromCourse(course), level: canonicalLevel(course.level) });
-    setCustomCategory(!courses.some((item) => item.category === course.category));
+    setDraft({ ...courseDraft, level: canonicalLevel(course.level) });
+    setCustomCategory(false);
     setNotice(null);
     setError(null);
     setFormError(null);
@@ -308,13 +432,23 @@ export default function CourseManagement({ token }: { token: string }) {
   const inputClass =
     "mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100";
   const labelClass = "block text-sm font-medium text-slate-700";
-  const categories = Array.from(
-    new Set([
-      ...courses.map((course) => course.category),
-      categoryFilter,
-      ...(draft.category ? [draft.category] : []),
-    ].filter(Boolean))
-  ).sort((left, right) => left.localeCompare(right));
+  const categoryNames = categories.map((category) => category.name);
+  const legacyCategory =
+    editingId !== null &&
+    Boolean(draft.category) &&
+    !categoryNames.includes(draft.category);
+  const shortDescriptionCharacters = countCharacters(draft.short_description);
+  const benefitLines = countContentLines(draft.benefits);
+  const shortDescriptionOverLimit = shortDescriptionCharacters > 100;
+  const benefitsOverLimit = benefitLines > 5;
+  const shortDescriptionLegacy =
+    editingId !== null &&
+    shortDescriptionOverLimit &&
+    draft.short_description === originalEditableContent.short_description;
+  const benefitsLegacy =
+    editingId !== null &&
+    benefitsOverLimit &&
+    draft.benefits === originalEditableContent.benefits;
   const pageCount = Math.ceil(total / PAGE_SIZE);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const firstPageNumber = Math.max(1, Math.min(currentPage - 2, pageCount - 4));
@@ -333,10 +467,18 @@ export default function CourseManagement({ token }: { token: string }) {
             Course Management
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Manage your courses, delivery modes, and course information.
+            Manage your courses, modes, and course information.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
+            onClick={() => setManageCategoriesOpen((open) => !open)}
+            type="button"
+          >
+            <FolderOpen aria-hidden="true" size={17} />
+            Manage Categories
+          </button>
           <span className="rounded-full border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700">
             {total} {total === 1 ? "course" : "courses"}
           </span>
@@ -346,6 +488,7 @@ export default function CourseManagement({ token }: { token: string }) {
             onClick={() => {
               setEditingId(null);
               setOriginalLevel("");
+              setOriginalCategory("");
               setLevelChanged(false);
               setDraft(emptyDraft);
               setCustomCategory(false);
@@ -361,6 +504,69 @@ export default function CourseManagement({ token }: { token: string }) {
           </button>
         </div>
       </header>
+
+      {manageCategoriesOpen && (
+        <section
+          aria-labelledby="manage-categories-heading"
+          className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+        >
+          <header className="border-b border-slate-200 px-4 py-4 sm:px-5">
+            <h3
+              className="font-semibold text-slate-950"
+              id="manage-categories-heading"
+            >
+              Manage Categories
+            </h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Deleting a category keeps every course and its saved details.
+            </p>
+          </header>
+          {categoriesError ? (
+            <p className="p-5 text-sm text-red-700" role="alert">
+              Could not load categories: {categoriesError}
+            </p>
+          ) : categoriesLoading ? (
+            <p className="p-5 text-sm text-slate-600" role="status">
+              Loading categories…
+            </p>
+          ) : categories.length === 0 ? (
+            <p className="p-5 text-sm text-slate-600">
+              No available categories.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {categories.map((category) => (
+                <li
+                  className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                  key={category.name}
+                >
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-semibold text-slate-900">
+                      {category.name}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {category.course_count}{" "}
+                      {category.course_count === 1 ? "course" : "courses"}{" "}
+                      assigned
+                    </p>
+                  </div>
+                  <button
+                    className="inline-flex min-h-9 items-center justify-center gap-2 self-start rounded-lg border border-red-200 px-3.5 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
+                    disabled={deletingCategory !== null}
+                    onClick={() => void deleteCategory(category)}
+                    type="button"
+                  >
+                    <Trash2 aria-hidden="true" size={15} />
+                    {deletingCategory === category.name
+                      ? "Deleting…"
+                      : "Delete"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 p-4 sm:p-5">
@@ -411,8 +617,8 @@ export default function CourseManagement({ token }: { token: string }) {
               >
                 <option value="">All categories</option>
                 {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
+                  <option key={category.name} value={category.name}>
+                    {category.name}
                   </option>
                 ))}
               </select>
@@ -630,18 +836,7 @@ export default function CourseManagement({ token }: { token: string }) {
                 />
               </label>
               <label className={labelClass}>
-                Slug
-                <input
-                  className={inputClass}
-                  maxLength={180}
-                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                  onChange={(event) => setDraft({ ...draft, slug: event.target.value })}
-                  required
-                  value={draft.slug}
-                />
-              </label>
-              <label className={labelClass}>
-                Type
+                Offering type
                 <select
                   className={inputClass}
                   onChange={(event) =>
@@ -653,6 +848,12 @@ export default function CourseManagement({ token }: { token: string }) {
                   <option value="internship">Internship</option>
                   <option value="programme">Programme</option>
                 </select>
+                {draft.course_type === "internship" && (
+                  <span className="text-xs font-normal leading-5 text-slate-500">
+                    Published internship offerings appear in the public Internship
+                    Opportunities section.
+                  </span>
+                )}
               </label>
               <label className={labelClass}>
                 Category
@@ -672,10 +873,15 @@ export default function CourseManagement({ token }: { token: string }) {
                 >
                   <option value="">Select a category</option>
                   {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
+                    <option key={category.name} value={category.name}>
+                      {category.name}
                     </option>
                   ))}
+                  {legacyCategory && (
+                    <option value={draft.category}>
+                      Saved category (legacy): {draft.category}
+                    </option>
+                  )}
                   <option value="__new__">Add a new category…</option>
                 </select>
                 {customCategory && (
@@ -730,7 +936,7 @@ export default function CourseManagement({ token }: { token: string }) {
                 </select>
               </label>
               <label className={labelClass}>
-                Delivery Mode
+                Mode
                 <select
                   className={inputClass}
                   onChange={(event) =>
@@ -807,14 +1013,48 @@ export default function CourseManagement({ token }: { token: string }) {
                 Short description
                 <textarea
                   className={inputClass}
-                  maxLength={300}
+                  aria-describedby="short-description-counter short-description-validation"
+                  aria-invalid={shortDescriptionOverLimit && !shortDescriptionLegacy}
                   onChange={(event) =>
-                    setDraft({ ...draft, short_description: event.target.value })
+                    setDraft({
+                      ...draft,
+                      short_description: Array.from(event.target.value)
+                        .slice(0, 100)
+                        .join(""),
+                    })
                   }
                   required
-                  rows={2}
+                  rows={3}
                   value={draft.short_description}
                 />
+                <span
+                  className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500"
+                  id="short-description-counter"
+                  aria-live="polite"
+                >
+                  <span>{shortDescriptionCharacters} / 100 characters</span>
+                  {shortDescriptionLegacy && (
+                    <span className="text-amber-700">
+                      Saved description exceeds the new limit; shorten it to
+                      update this field.
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={
+                    shortDescriptionOverLimit && !shortDescriptionLegacy
+                      ? "mt-1 block text-xs text-red-700"
+                      : "sr-only"
+                  }
+                  id="short-description-validation"
+                  role={
+                    shortDescriptionOverLimit && !shortDescriptionLegacy
+                      ? "alert"
+                      : undefined
+                  }
+                >
+                  Short description must be no more than 100 characters.
+                </span>
               </label>
               <label className={`${labelClass} sm:col-span-2 lg:col-span-3`}>
                 Full description
@@ -829,26 +1069,10 @@ export default function CourseManagement({ token }: { token: string }) {
                   value={draft.full_description}
                 />
               </label>
-              <details className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-3">
-                <summary className="cursor-pointer px-4 py-3.5 text-sm font-semibold text-slate-800">
-                  Curriculum Overview
-                </summary>
-                <div className="border-t border-slate-200 p-4">
-                  <label className={labelClass}>
-                    Curriculum or learning outcomes (one item per line)
-                    <textarea
-                      className={inputClass}
-                      maxLength={10000}
-                      onChange={(event) =>
-                        setDraft({ ...draft, curriculum: event.target.value })
-                      }
-                      rows={6}
-                      value={draft.curriculum}
-                    />
-                  </label>
-                </div>
-              </details>
-              <details className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-3">
+              <details
+                className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-3"
+                open={benefitsOverLimit || undefined}
+              >
                 <summary className="cursor-pointer px-4 py-3.5 text-sm font-semibold text-slate-800">
                   Course / Internship / Program Benefits
                 </summary>
@@ -857,13 +1081,43 @@ export default function CourseManagement({ token }: { token: string }) {
                     Benefits (one per line)
                     <textarea
                       className={inputClass}
+                      aria-describedby="benefits-counter benefits-validation"
+                      aria-invalid={benefitsOverLimit && !benefitsLegacy}
                       maxLength={10000}
                       onChange={(event) =>
                         setDraft({ ...draft, benefits: event.target.value })
                       }
-                      rows={5}
+                      rows={6}
                       value={draft.benefits}
                     />
+                    <span
+                      className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500"
+                      id="benefits-counter"
+                      aria-live="polite"
+                    >
+                      <span>{benefitLines} / 5 lines</span>
+                      {benefitsLegacy && (
+                        <span className="text-amber-700">
+                          Saved benefits exceed the new limit. Reduce them to
+                          5 lines before changing this field.
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={
+                        benefitsOverLimit && !benefitsLegacy
+                          ? "mt-1 block text-xs text-red-700"
+                          : "sr-only"
+                      }
+                      id="benefits-validation"
+                      role={
+                        benefitsOverLimit && !benefitsLegacy
+                          ? "alert"
+                          : undefined
+                      }
+                    >
+                      Benefits must contain no more than 5 non-empty lines.
+                    </span>
                   </label>
                 </div>
               </details>

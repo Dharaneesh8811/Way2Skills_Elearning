@@ -10,6 +10,7 @@ from app.api.identifiers import get_record_by_id
 from app.db.session import get_session
 from app.models.admission import Admission
 from app.models.course import Course
+from app.models.course_category import CourseCategory
 from app.models.enums import CourseType
 from app.schemas.admin import PageResponse
 from app.schemas.course import CourseCreate, CourseRead, CourseUpdate
@@ -22,6 +23,17 @@ def _course_by_id(session: Session, course_id: str) -> Course:
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
     return course
+
+
+def _activate_category(session: Session, name: str) -> None:
+    category = session.get(CourseCategory, name)
+    if category is None:
+        session.add(CourseCategory(name=name, is_active=True))
+    elif not category.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="This category is no longer available for new assignments",
+        )
 
 
 @router.get("", response_model=PageResponse)
@@ -73,6 +85,7 @@ def create_course(
 ) -> Course:
     course = Course(**payload.model_dump(mode="json"))
     session.add(course)
+    _activate_category(session, course.category)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -97,7 +110,10 @@ def update_course(
     session: Session = Depends(get_session),
 ) -> Course:
     course = _course_by_id(session, course_id)
-    for field, value in payload.model_dump(exclude_unset=True, mode="json").items():
+    updates = payload.model_dump(exclude_unset=True, mode="json")
+    if "category" in updates and updates["category"] != course.category:
+        _activate_category(session, updates["category"])
+    for field, value in updates.items():
         setattr(course, field, value)
     try:
         session.commit()

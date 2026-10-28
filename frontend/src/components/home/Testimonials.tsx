@@ -206,7 +206,8 @@ export default function Testimonials() {
   return (
     <section
       id="student-stories"
-      className="relative isolate overflow-hidden bg-[#EAF7FC] px-4 py-12 text-[#101820] sm:px-8 sm:py-20 lg:py-24"
+      // className="relative isolate overflow-hidden bg-[#EAF7FC] px-4 py-12 text-[#101820] sm:px-8 sm:py-20 lg:py-24"
+      className="relative isolate overflow-hidden bg-white px-4 py-12 text-[#101820] sm:px-8 sm:py-20 lg:py-24"
     >
       <div
         aria-hidden="true"

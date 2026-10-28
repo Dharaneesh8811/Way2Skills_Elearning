@@ -37,7 +37,7 @@ class Course(UUIDPrimaryKeyMixin, Base):
 
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     slug: Mapped[str] = mapped_column(String(180), nullable=False, unique=True)
-    short_description: Mapped[str] = mapped_column(String(300), nullable=False)
+    short_description: Mapped[str] = mapped_column(Text, nullable=False)
     full_description: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(String(80), nullable=False)
     course_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
