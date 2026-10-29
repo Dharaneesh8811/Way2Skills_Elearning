@@ -1,5 +1,6 @@
 from uuid import UUID
 
+import pytest
 from sqlalchemy import select
 
 from app.models.admission import Admission
@@ -155,6 +156,135 @@ def test_course_create_update_publish_and_public_listing(client, auth_headers):
     assert test_client.get("/api/courses").json() == []
     with testing_session() as session:
         assert session.scalar(select(Course).where(Course.slug == "web-foundations"))
+
+
+def test_optional_internship_period_persists_updates_and_is_public(client, auth_headers):
+    test_client, testing_session = client
+    created = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "internship-period", "internship_period": 3},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    course_id = created.json()["id"]
+    assert created.json()["internship_period"] == 3
+
+    published = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"is_published": True},
+        headers=auth_headers,
+    )
+    assert published.status_code == 200
+    assert test_client.get("/api/courses").json()[0]["internship_period"] == 3
+    assert test_client.get("/api/courses/internship-period").json()[
+        "internship_period"
+    ] == 3
+
+    updated = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"internship_period": 6},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["internship_period"] == 6
+    assert test_client.get("/api/courses/internship-period").json()[
+        "internship_period"
+    ] == 6
+
+    cleared = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"internship_period": None},
+        headers=auth_headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["internship_period"] is None
+    assert test_client.get("/api/courses/internship-period").json()[
+        "internship_period"
+    ] is None
+
+    without_period = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "no-internship-period"},
+        headers=auth_headers,
+    )
+    assert without_period.status_code == 201
+    assert without_period.json()["internship_period"] is None
+    with testing_session() as session:
+        stored = session.scalar(
+            select(Course).where(Course.id == UUID(course_id))
+        )
+        assert stored is not None
+        assert stored.internship_period is None
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, "invalid"])
+def test_internship_period_must_be_a_positive_whole_number(
+    client, auth_headers, value
+):
+    test_client, _ = client
+    valid_course = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "internship-period-validation"},
+        headers=auth_headers,
+    )
+    assert valid_course.status_code == 201
+
+    response = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "invalid-internship-period", "internship_period": value},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    update_response = test_client.patch(
+        f"/api/admin/courses/{valid_course.json()['id']}",
+        json={"internship_period": value},
+        headers=auth_headers,
+    )
+    assert update_response.status_code == 422
+
+
+def test_internship_duration_months_flows_correctly(client, auth_headers):
+    test_client, testing_session = client
+    # 1. Create with internship_duration_months
+    created = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "full-stack-web-internship", "duration": "4 Months", "internship_duration_months": 2},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    course_id = created.json()["id"]
+    assert created.json()["internship_duration_months"] == 2
+    assert created.json()["internship_period"] == 2
+
+    # Publish
+    test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"is_published": True},
+        headers=auth_headers,
+    )
+    # Check public courses endpoint
+    pub_course = test_client.get("/api/courses/full-stack-web-internship").json()
+    assert pub_course["duration"] == "4 Months"
+    assert pub_course["internship_duration_months"] == 2
+
+    # 2. Update internship_duration_months
+    updated = test_client.patch(
+        f"/api/admin/courses/{course_id}",
+        json={"internship_duration_months": 3},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["internship_duration_months"] == 3
+    assert test_client.get("/api/courses/full-stack-web-internship").json()["internship_duration_months"] == 3
+
+    # 3. Create course without internship
+    without = test_client.post(
+        "/api/admin/courses",
+        json={**COURSE, "slug": "ui-ux-design", "duration": "3 Months"},
+        headers=auth_headers,
+    )
+    assert without.status_code == 201
+    assert without.json()["internship_duration_months"] is None
 
 
 def test_course_details_optional_price_image_and_certificates_persist(
@@ -419,9 +549,7 @@ def test_public_internships_and_programmes_are_filtered_by_type(client, auth_hea
         assert test_client.post(
             "/api/admin/courses", json=payload, headers=auth_headers
         ).status_code == 201
-    assert [item["slug"] for item in test_client.get("/api/internships").json()] == [
-        "internship-term"
-    ]
+    assert test_client.get("/api/internships").json() == []
     assert [item["slug"] for item in test_client.get("/api/programmes").json()] == [
         "study-programme"
     ]

@@ -24,6 +24,12 @@ import {
   VALID_EDUCATION_LEVELS,
 } from "@/lib/formValidation";
 import { courseRequest, type Course } from "@/lib/coursesApi";
+import {
+  internshipRequest,
+  type Internship,
+} from "@/lib/internshipsApi";
+
+type ProgrammeType = "course" | "internship" | "programme";
 
 type AdmissionFormData = {
   name: string;
@@ -45,9 +51,14 @@ const initialFormData: AdmissionFormData = {
 
 export default function AdmissionForm() {
   const [formData, setFormData] = useState<AdmissionFormData>(initialFormData);
+  const [programmeType, setProgrammeType] = useState<ProgrammeType>("course");
   const [courses, setCourses] = useState<Course[]>([]);
-  const [courseLoading, setCourseLoading] = useState(true);
-  const [courseLoadError, setCourseLoadError] = useState<string | null>(null);
+  const [programmes, setProgrammes] = useState<Course[]>([]);
+  const [internships, setInternships] = useState<Internship[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  const [optionsLoadErrors, setOptionsLoadErrors] = useState<
+    Partial<Record<ProgrammeType, string>>
+  >({});
   const [touched, setTouched] = useState<Record<keyof AdmissionFormData, boolean>>({
     name: false,
     email: false,
@@ -66,30 +77,64 @@ export default function AdmissionForm() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
+    Promise.allSettled([
       courseRequest<Course[]>("/api/courses"),
       courseRequest<Course[]>("/api/programmes"),
+      internshipRequest<Internship[]>("/api/internships"),
     ])
-      .then(([courseItems, programmeItems]) => {
+      .then(([courseResult, programmeResult, internshipResult]) => {
         if (!active) return;
-        const availableCourses = [...courseItems, ...programmeItems];
-        setCourses(availableCourses);
-        const requestedSlug = new URLSearchParams(window.location.search).get("course");
-        if (requestedSlug && availableCourses.some((item) => item.slug === requestedSlug)) {
-          setFormData((previous) => ({ ...previous, course: requestedSlug }));
+        const loadErrors: Partial<Record<ProgrammeType, string>> = {};
+        if (courseResult.status === "fulfilled") {
+          setCourses(courseResult.value);
+        } else {
+          loadErrors.course = "Published courses could not be loaded.";
         }
-      })
-      .catch((requestError: unknown) => {
-        if (active) {
-          setCourseLoadError(
-            requestError instanceof Error
-              ? requestError.message
-              : "Available programmes could not be loaded."
-          );
+        if (programmeResult.status === "fulfilled") {
+          setProgrammes(programmeResult.value);
+        } else {
+          loadErrors.programme = "Published programmes could not be loaded.";
+        }
+        if (internshipResult.status === "fulfilled") {
+          setInternships(internshipResult.value);
+        } else {
+          loadErrors.internship = "Published internships could not be loaded.";
+        }
+        setOptionsLoadErrors(loadErrors);
+
+        const query = new URLSearchParams(window.location.search);
+        const requestedCourse = query.get("course");
+        const requestedInternship = query.get("internship");
+        const requestedType = query.get("type");
+        if (
+          requestedInternship &&
+          internshipResult.status === "fulfilled" &&
+          internshipResult.value.some((item) => item.slug === requestedInternship)
+        ) {
+          setProgrammeType("internship");
+          setFormData((previous) => ({ ...previous, course: requestedInternship }));
+        } else if (requestedCourse) {
+          if (
+            programmeResult.status === "fulfilled" &&
+            programmeResult.value.some((item) => item.slug === requestedCourse)
+          ) {
+            setProgrammeType("programme");
+            setFormData((previous) => ({ ...previous, course: requestedCourse }));
+          } else if (
+            courseResult.status === "fulfilled" &&
+            courseResult.value.some((item) => item.slug === requestedCourse)
+          ) {
+            setProgrammeType("course");
+            setFormData((previous) => ({ ...previous, course: requestedCourse }));
+          }
+        } else if (requestedType === "internship") {
+          setProgrammeType("internship");
+        } else if (requestedType === "programme") {
+          setProgrammeType("programme");
         }
       })
       .finally(() => {
-        if (active) setCourseLoading(false);
+        if (active) setOptionsLoading(false);
       });
     return () => {
       active = false;
@@ -97,9 +142,16 @@ export default function AdmissionForm() {
   }, []);
 
   // Compute live validation errors
-  const selectedCourseIsAvailable = courses.some(
-    (course) => course.slug === formData.course
+  const availableItems =
+    programmeType === "internship"
+      ? internships
+      : programmeType === "programme"
+        ? programmes
+        : courses;
+  const selectedItemIsAvailable = availableItems.some(
+    (item) => item.slug === formData.course
   );
+  const selectionLoadError = optionsLoadErrors[programmeType];
   const errors = {
     name: validateName(formData.name),
     email: validateEmail(formData.email),
@@ -107,11 +159,11 @@ export default function AdmissionForm() {
     education: validateEducation(formData.education),
     course:
       validateCourse(formData.course) ??
-      (selectedCourseIsAvailable
+      (selectedItemIsAvailable
         ? null
-        : courses.length === 0
-          ? "No published courses or programmes are available."
-          : "Please select an available course or programme."),
+        : availableItems.length === 0
+          ? `No published ${programmeType === "internship" ? "internships" : programmeType === "programme" ? "programmes" : "courses"} are available.`
+          : `Please select an available ${programmeType}.`),
     message: validateAdmissionMessage(formData.message),
   };
 
@@ -138,6 +190,20 @@ export default function AdmissionForm() {
         [name]: value,
       }));
     }
+  }
+
+  function handleProgrammeTypeChange(event: ChangeEvent<HTMLSelectElement>) {
+    const value = event.target.value;
+    if (
+      value !== "course" &&
+      value !== "internship" &&
+      value !== "programme"
+    ) {
+      return;
+    }
+    setProgrammeType(value);
+    setFormData((previous) => ({ ...previous, course: "" }));
+    setTouched((previous) => ({ ...previous, course: false }));
   }
 
   function handleBlur(
@@ -183,7 +249,13 @@ export default function AdmissionForm() {
           email: formData.email.trim(),
           phone: formData.phone.trim(),
           education: formData.education.trim(),
-          course: formData.course.trim(),
+          course:
+            programmeType === "internship"
+              ? `Internship: ${internships.find((item) => item.slug === formData.course)?.title ?? formData.course.trim()}`.slice(
+                  0,
+                  100
+                )
+              : formData.course.trim(),
           message: formData.message.trim(),
         },
         requestId
@@ -415,12 +487,40 @@ export default function AdmissionForm() {
           )}
         </div>
 
-        {/* Programme */}
-        <div className="sm:col-span-2">
-          <label htmlFor="admission-course" className={labelStyle}>
-            Programme <span className="text-red-400">*</span>
+        {/* Enquiry type */}
+        <div>
+          <label htmlFor="admission-programme-type" className={labelStyle}>
+            Enquiry Type <span className="text-red-400">*</span>
           </label>
+          <select
+            id="admission-programme-type"
+            name="programmeType"
+            value={programmeType}
+            onChange={handleProgrammeTypeChange}
+            className={`${baseInputStyle} border-white/10 focus:border-sky-400 focus:ring-sky-400/10 [color-scheme:dark]`}
+          >
+            <option value="course" className="bg-[#24344f] text-white">
+              Courses
+            </option>
+            <option value="internship" className="bg-[#24344f] text-white">
+              Internship
+            </option>
+            <option value="programme" className="bg-[#24344f] text-white">
+              Programme
+            </option>
+          </select>
+        </div>
 
+        {/* Selected course, internship, or programme */}
+        <div>
+          <label htmlFor="admission-course" className={labelStyle}>
+            {programmeType === "internship"
+              ? "Internship"
+              : programmeType === "programme"
+                ? "Programme"
+                : "Course"}{" "}
+            <span className="text-red-400">*</span>
+          </label>
           <select
             id="admission-course"
             name="course"
@@ -437,21 +537,23 @@ export default function AdmissionForm() {
             className={`${getInputClassName("course")} [color-scheme:dark]`}
           >
               <option value="" disabled className="bg-[#24344f] text-white/50">
-                {courseLoading ? "Loading courses..." : "Select a course"}
+                {optionsLoading
+                  ? "Loading options..."
+                  : `Select a ${programmeType}`}
               </option>
-              {courses.map((course) => (
+              {availableItems.map((item) => (
                 <option
                   className="bg-[#24344f] text-white"
-                  key={course.id}
-                  value={course.slug}
+                  key={item.id}
+                  value={item.slug}
                 >
-                  {course.title}
+                  {item.title}
                 </option>
               ))}
             </select>
-            {courseLoadError && (
+            {selectionLoadError && (
               <p className="mt-1.5 text-xs font-medium text-amber-200" role="status">
-                Course options could not be loaded. Please try again later.
+                {selectionLoadError} Please try again later.
               </p>
             )}
           {touched.course && errors.course && (
@@ -465,9 +567,9 @@ export default function AdmissionForm() {
           )}
 
           <p className="mt-2 text-[11px] leading-5 text-white/40">
-            {courseLoading
-              ? "Loading published courses and programmes..."
-              : "Choose from currently published courses and programmes."}
+            {optionsLoading
+              ? "Loading published courses, internships, and programmes..."
+              : `Choose from currently published ${programmeType === "internship" ? "internships" : `${programmeType}s`}.`}
           </p>
         </div>
 

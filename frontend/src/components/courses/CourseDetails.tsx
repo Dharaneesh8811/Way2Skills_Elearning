@@ -145,6 +145,18 @@ export default function CourseDetails({ slug }: CourseDetailsProps) {
                       </dt>
                       <dd>{course.duration}</dd>
                     </div>
+                    {Number(course.internship_duration_months ?? course.internship_period) > 0 && (
+                      <div className="course-metadata-item">
+                        <dt>
+                          <Award aria-hidden="true" size={15} />
+                          Internship
+                        </dt>
+                        <dd>
+                          {Number(course.internship_duration_months ?? course.internship_period)}{" "}
+                          Month{Number(course.internship_duration_months ?? course.internship_period) === 1 ? "" : "s"}*
+                        </dd>
+                      </div>
+                    )}
                     <div className="course-metadata-item">
                       <dt>
                         <Signal aria-hidden="true" size={15} />

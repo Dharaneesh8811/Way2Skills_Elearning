@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, BookOpen, BriefcaseBusiness, CircleCheck, FileEdit } from "lucide-react";
 import { courseRequest, type CoursePage } from "@/lib/coursesApi";
+import { type InternshipPage } from "@/lib/internshipsApi";
 import { useAdminAuth, useAdminPage } from "@/components/admin/AdminAuth";
 
 type DashboardSummary = {
@@ -33,8 +34,8 @@ export default function AdminPage() {
         "/api/admin/courses?limit=1&is_published=false",
         token
       ),
-      courseRequest<CoursePage>(
-        "/api/admin/courses?limit=1&course_type=internship",
+      courseRequest<InternshipPage>(
+        "/api/admin/internships?limit=1",
         token
       ),
     ])
@@ -93,18 +94,26 @@ export default function AdminPage() {
         <p className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-800" role="alert">
           Dashboard data is unavailable. {error}
         </p>
-      ) : summary && summary.total === 0 ? (
+      ) : summary && summary.total === 0 && summary.internships === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6">
-          <h3 className="font-semibold text-slate-900">No courses yet</h3>
+          <h3 className="font-semibold text-slate-900">No records yet</h3>
           <p className="mt-1 text-sm text-slate-600">
             Add a course or internship to begin managing your catalogue.
           </p>
-          <Link
-            className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-full bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-800"
-            href="/admin/courses"
-          >
-            Add a course <ArrowRight aria-hidden="true" size={16} />
-          </Link>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link
+              className="inline-flex min-h-10 items-center gap-2 rounded-full bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-800"
+              href="/admin/courses"
+            >
+              Add a course <ArrowRight aria-hidden="true" size={16} />
+            </Link>
+            <Link
+              className="inline-flex min-h-10 items-center gap-2 rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              href="/admin/internships"
+            >
+              Add an internship <ArrowRight aria-hidden="true" size={16} />
+            </Link>
+          </div>
         </div>
       ) : (
         <>
@@ -153,7 +162,7 @@ export default function AdminPage() {
                 <ArrowRight aria-hidden="true" className="ml-auto text-slate-400 transition-transform group-hover:translate-x-0.5" size={17} />
               </span>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Review internship offerings saved in the course catalogue.
+                Create and manage internships independently from courses.
               </p>
             </Link>
           </section>

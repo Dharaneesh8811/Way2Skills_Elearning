@@ -17,7 +17,7 @@ import { AdminAuthProvider, AdminLogin, useAdminAuth } from "@/components/admin/
 const navigation = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/courses", label: "Courses", icon: BookOpen },
-  { href: "/admin/internships", label: "Internship", icon: BriefcaseBusiness },
+  { href: "/admin/internships", label: "Internships", icon: BriefcaseBusiness },
   { href: "/admin/feedback", label: "Feedback", icon: MessageSquareText },
 ] as const;
 

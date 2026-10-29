@@ -22,6 +22,8 @@ export type Course = {
   category: string;
   course_type: CourseType;
   duration: string;
+  internship_duration_months?: number | null;
+  internship_period?: number | null;
   level: string;
   delivery_mode: string;
   image_url: string | null;

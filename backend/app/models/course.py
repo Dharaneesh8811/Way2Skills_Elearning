@@ -5,6 +5,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Index,
+    Integer,
     JSON,
     Numeric,
     String,
@@ -22,6 +23,10 @@ class Course(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         CheckConstraint("price IS NULL OR price >= 0", name="nonnegative_price"),
         CheckConstraint("display_order >= 0", name="nonnegative_display_order"),
+        CheckConstraint(
+            "internship_period IS NULL OR internship_period > 0",
+            name="positive_internship_period",
+        ),
         CheckConstraint(
             "course_type IN ('course', 'internship', 'programme')",
             name="valid_course_type",
@@ -42,6 +47,16 @@ class Course(UUIDPrimaryKeyMixin, Base):
     category: Mapped[str] = mapped_column(String(80), nullable=False)
     course_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     duration: Mapped[str] = mapped_column(String(80), nullable=False)
+    internship_period: Mapped[int | None] = mapped_column(Integer)
+
+    @property
+    def internship_duration_months(self) -> int | None:
+        return self.internship_period
+
+    @internship_duration_months.setter
+    def internship_duration_months(self, value: int | None) -> None:
+        self.internship_period = value
+
     level: Mapped[str] = mapped_column(String(40), nullable=False)
     delivery_mode: Mapped[str] = mapped_column(String(40), nullable=False)
     image_url: Mapped[str | None] = mapped_column(String(2048))

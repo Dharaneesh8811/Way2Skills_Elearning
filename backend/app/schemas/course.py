@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -60,6 +60,8 @@ class CourseCreate(APIModel):
     category: str = Field(min_length=1, max_length=80)
     course_type: CourseType
     duration: str = Field(min_length=1, max_length=80)
+    internship_period: int | None = Field(default=None, ge=1)
+    internship_duration_months: int | None = Field(default=None, ge=1)
     level: CourseLevel
     delivery_mode: str = Field(min_length=1, max_length=40)
     image_url: str | None = Field(default=None, max_length=2048)
@@ -72,6 +74,16 @@ class CourseCreate(APIModel):
     is_published: bool = False
     is_featured: bool = False
     display_order: int = Field(default=0, ge=0, le=100000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_internship_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if data.get("internship_duration_months") is not None and data.get("internship_period") is None:
+                data["internship_period"] = data["internship_duration_months"]
+            elif data.get("internship_period") is not None and data.get("internship_duration_months") is None:
+                data["internship_duration_months"] = data["internship_period"]
+        return data
 
     @field_validator("short_description")
     @classmethod
@@ -111,6 +123,8 @@ class CourseUpdate(APIModel):
     category: str | None = Field(default=None, min_length=1, max_length=80)
     course_type: CourseType | None = None
     duration: str | None = Field(default=None, min_length=1, max_length=80)
+    internship_period: int | None = Field(default=None, ge=1)
+    internship_duration_months: int | None = Field(default=None, ge=1)
     level: CourseLevel | None = None
     delivery_mode: str | None = Field(default=None, min_length=1, max_length=40)
     image_url: str | None = Field(default=None, max_length=2048)
@@ -123,6 +137,16 @@ class CourseUpdate(APIModel):
     is_published: bool | None = None
     is_featured: bool | None = None
     display_order: int | None = Field(default=None, ge=0, le=100000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_internship_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "internship_duration_months" in data and "internship_period" not in data:
+                data["internship_period"] = data["internship_duration_months"]
+            elif "internship_period" in data and "internship_duration_months" not in data:
+                data["internship_duration_months"] = data["internship_period"]
+        return data
 
     @field_validator("short_description")
     @classmethod
@@ -179,6 +203,8 @@ class CourseRead(ORMModel):
     category: str
     course_type: CourseType
     duration: str
+    internship_period: int | None = None
+    internship_duration_months: int | None = None
     level: str
     delivery_mode: str
     image_url: str | None
@@ -193,3 +219,11 @@ class CourseRead(ORMModel):
     display_order: int
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def populate_internship_duration_months(self) -> "CourseRead":
+        if self.internship_duration_months is None and self.internship_period is not None:
+            self.internship_duration_months = self.internship_period
+        elif self.internship_period is None and self.internship_duration_months is not None:
+            self.internship_period = self.internship_duration_months
+        return self

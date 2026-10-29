@@ -4,18 +4,20 @@ import { useEffect, useMemo, useState } from "react";
 import CourseCard from "@/components/courses/CourseCard";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
-import { courseRequest, type Course } from "@/lib/coursesApi";
+import {
+  internshipRequest,
+  type Internship,
+} from "@/lib/internshipsApi";
 
 export default function InternshipDetails() {
-  const [internships, setInternships] = useState<Course[]>([]);
+  const [internships, setInternships] = useState<Internship[]>([]);
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState("All internships");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    courseRequest<Course[]>("/api/internships")
+    internshipRequest<Internship[]>("/api/internships")
       .then((items) => {
         if (active) setInternships(items);
       })
@@ -36,27 +38,20 @@ export default function InternshipDetails() {
     };
   }, []);
 
-  const categories = useMemo(
-    () => ["All internships", ...new Set(internships.map((item) => item.category))],
-    [internships]
-  );
   const visibleInternships = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return internships.filter((internship) => {
-      const matchesCategory =
-        activeCategory === "All internships" || internship.category === activeCategory;
-      const matchesSearch =
+    return internships.filter(
+      (internship) =>
         !query ||
         [
           internship.title,
           internship.short_description,
           internship.full_description,
-          internship.category,
-          internship.duration,
-        ].some((value) => value.toLowerCase().includes(query));
-      return matchesCategory && matchesSearch;
-    });
-  }, [activeCategory, internships, search]);
+          internship.eligibility ?? "",
+          ...internship.skills,
+        ].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [internships, search]);
 
   return (
     <main className="w2s-internship-page min-h-screen overflow-x-clip text-[#101820]">
@@ -74,44 +69,21 @@ export default function InternshipDetails() {
               Internship Opportunities
             </h1>
             <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base sm:leading-7">
-              Explore currently published internship offerings and their listed
-              details.
+              Explore currently published internship opportunities and their details.
             </p>
           </header>
 
           {!loading && !error && (
-            <div className="mt-7 flex flex-col gap-4 sm:mt-9 lg:flex-row lg:items-center lg:justify-between">
-              <div
-                aria-label="Filter internships by category"
-                className="flex flex-wrap gap-2"
-              >
-                {categories.map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    aria-pressed={activeCategory === category}
-                    onClick={() => setActiveCategory(category)}
-                    className={`min-h-10 rounded-full border px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-700 focus-visible:ring-offset-2 ${
-                      activeCategory === category
-                        ? "border-blue-700 bg-blue-700 text-white"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-sky-400 hover:text-sky-800"
-                    }`}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-              <label className="w-full lg:max-w-sm">
-                <span className="sr-only">Search internships</span>
-                <input
-                  className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search internships..."
-                  type="search"
-                  value={search}
-                />
-              </label>
-            </div>
+            <label className="mx-auto mt-7 block w-full sm:mt-9 lg:max-w-sm">
+              <span className="sr-only">Search internships</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search internships..."
+                type="search"
+                value={search}
+              />
+            </label>
           )}
 
           {loading ? (
@@ -135,8 +107,8 @@ export default function InternshipDetails() {
             <div className="mt-8 grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
               {visibleInternships.map((internship) => (
                 <CourseCard
-                  course={internship}
                   index={internships.findIndex((item) => item.id === internship.id)}
+                  internship={internship}
                   key={internship.id}
                 />
               ))}

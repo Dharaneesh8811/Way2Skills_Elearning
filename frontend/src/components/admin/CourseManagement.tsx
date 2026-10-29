@@ -9,9 +9,8 @@ import {
 } from "react";
 import {
   BookOpen,
-  ChevronLeft,
-  ChevronRight,
   FolderOpen,
+  Pencil,
   Plus,
   Search,
   Trash2,
@@ -28,6 +27,7 @@ import {
   type CourseType,
 } from "@/lib/coursesApi";
 import CourseImage from "@/components/courses/CourseImage";
+import AdminPagination from "@/components/admin/AdminPagination";
 
 const PAGE_SIZE = 10;
 const DELIVERY_MODES = ["Online", "Offline", "Flexible"] as const;
@@ -41,6 +41,7 @@ type CourseDraft = {
   category: string;
   course_type: CourseType;
   duration: string;
+  internship_duration_months: string;
   level: string;
   delivery_mode: string;
   image_url: string;
@@ -66,6 +67,7 @@ const emptyDraft: CourseDraft = {
   category: "",
   course_type: "course",
   duration: "",
+  internship_duration_months: "",
   level: "Beginner",
   delivery_mode: "Online",
   image_url: "",
@@ -98,10 +100,17 @@ function slugFromTitle(title: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-  return slug.length >= 2 ? slug : "offering";
+  return slug.length >= 2 ? slug : "course";
 }
 
 function fromCourse(course: Course): CourseDraft {
+  const rawInternship =
+    course.internship_duration_months != null
+      ? course.internship_duration_months
+      : course.internship_period != null
+      ? course.internship_period
+      : null;
+
   return {
     title: course.title,
     slug: course.slug,
@@ -110,6 +119,8 @@ function fromCourse(course: Course): CourseDraft {
     category: course.category,
     course_type: course.course_type,
     duration: course.duration,
+    internship_duration_months:
+      rawInternship != null ? String(rawInternship) : "",
     level: course.level,
     delivery_mode: course.delivery_mode,
     image_url: course.image_url ?? "",
@@ -124,13 +135,28 @@ function fromCourse(course: Course): CourseDraft {
 }
 
 function messageFrom(error: unknown): string {
-  return error instanceof Error ? error.message : "The request could not be completed.";
+  return error instanceof Error
+    ? error.message
+    : "The request could not be completed.";
 }
 
 function canonicalLevel(level: string): string {
-  return COURSE_LEVELS.find(
-    (option) => option.toLowerCase() === level.trim().toLowerCase()
-  ) ?? "";
+  return (
+    COURSE_LEVELS.find(
+      (option) => option.toLowerCase() === level.trim().toLowerCase()
+    ) ?? ""
+  );
+}
+
+function coursePrice(price: string | null): string | null {
+  if (price == null || !price.trim()) return null;
+  const amount = Number(price);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 export default function CourseManagement({ token }: { token: string }) {
@@ -141,7 +167,7 @@ export default function CourseManagement({ token }: { token: string }) {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState<CourseType>("course");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [publishedFilter, setPublishedFilter] = useState("");
   const [customCategory, setCustomCategory] = useState(false);
@@ -160,27 +186,27 @@ export default function CourseManagement({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const titleInputRef = useRef<HTMLInputElement>(null);
-  const previousBodyOverflow = useRef("");
   const categoryDeletePending = useRef(false);
 
-  const loadCategories = useCallback(async (signal?: AbortSignal) => {
-    setCategoriesLoading(true);
-    setCategoriesError(null);
-    try {
-      const availableCategories = await courseRequest<CourseCategory[]>(
-        "/api/admin/categories",
-        token,
-        { signal }
-      );
-      if (!signal?.aborted) setCategories(availableCategories);
-    } catch (requestError) {
-      if (!signal?.aborted) setCategoriesError(messageFrom(requestError));
-    } finally {
-      if (!signal?.aborted) setCategoriesLoading(false);
-    }
-  }, [token]);
+  const loadCategories = useCallback(
+    async (signal?: AbortSignal) => {
+      setCategoriesLoading(true);
+      setCategoriesError(null);
+      try {
+        const availableCategories = await courseRequest<CourseCategory[]>(
+          "/api/admin/categories",
+          token,
+          { signal }
+        );
+        if (!signal?.aborted) setCategories(availableCategories);
+      } catch (requestError) {
+        if (!signal?.aborted) setCategoriesError(messageFrom(requestError));
+      } finally {
+        if (!signal?.aborted) setCategoriesLoading(false);
+      }
+    },
+    [token]
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -188,43 +214,43 @@ export default function CourseManagement({ token }: { token: string }) {
     return () => controller.abort();
   }, [loadCategories]);
 
-  const loadCourses = useCallback(async (
-    requestedOffset = offset,
-    signal?: AbortSignal
-  ) => {
-    setLoading(true);
-    setError(null);
-    const params = new URLSearchParams({
-      limit: String(PAGE_SIZE),
-      offset: String(requestedOffset),
-    });
-    if (search.trim()) params.set("search", search.trim());
-    if (typeFilter) params.set("course_type", typeFilter);
-    if (categoryFilter) params.set("category", categoryFilter);
-    if (publishedFilter) params.set("is_published", publishedFilter);
-    try {
-      const page = await courseRequest<CoursePage>(
-        `/api/admin/courses?${params.toString()}`,
-        token,
-        { signal }
-      );
-      if (signal?.aborted) return;
-      const lastPageOffset =
-        Math.max(0, Math.ceil(page.total / PAGE_SIZE) - 1) * PAGE_SIZE;
-      if (requestedOffset > lastPageOffset) {
+  const loadCourses = useCallback(
+    async (requestedOffset = offset, signal?: AbortSignal) => {
+      setLoading(true);
+      setError(null);
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(requestedOffset),
+      });
+      if (search.trim()) params.set("search", search.trim());
+      if (typeFilter) params.set("course_type", typeFilter);
+      if (categoryFilter) params.set("category", categoryFilter);
+      if (publishedFilter) params.set("is_published", publishedFilter);
+      try {
+        const page = await courseRequest<CoursePage>(
+          `/api/admin/courses?${params.toString()}`,
+          token,
+          { signal }
+        );
+        if (signal?.aborted) return;
+        const lastPageOffset =
+          Math.max(0, Math.ceil(page.total / PAGE_SIZE) - 1) * PAGE_SIZE;
+        if (requestedOffset > lastPageOffset) {
+          setTotal(page.total);
+          setCourses([]);
+          setOffset(lastPageOffset);
+          return;
+        }
+        setCourses(page.items);
         setTotal(page.total);
-        setCourses([]);
-        setOffset(lastPageOffset);
-        return;
+      } catch (requestError) {
+        if (!signal?.aborted) setError(messageFrom(requestError));
+      } finally {
+        if (!signal?.aborted) setLoading(false);
       }
-      setCourses(page.items);
-      setTotal(page.total);
-    } catch (requestError) {
-      if (!signal?.aborted) setError(messageFrom(requestError));
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, [categoryFilter, offset, publishedFilter, search, token, typeFilter]);
+    },
+    [categoryFilter, offset, publishedFilter, search, token, typeFilter]
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -238,24 +264,6 @@ export default function CourseManagement({ token }: { token: string }) {
     };
   }, [loadCourses, offset]);
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (editorOpen && dialog && !dialog.open) {
-      dialog.showModal();
-      previousBodyOverflow.current = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-      titleInputRef.current?.focus();
-    } else if (!editorOpen && dialog?.open) {
-      dialog.close();
-    }
-
-    return () => {
-      if (editorOpen) {
-        document.body.style.overflow = previousBodyOverflow.current;
-      }
-    };
-  }, [editorOpen]);
-
   function resetEditor() {
     setEditingId(null);
     setOriginalLevel("");
@@ -268,6 +276,24 @@ export default function CourseManagement({ token }: { token: string }) {
     setEditorOpen(false);
   }
 
+  function editCourse(course: Course) {
+    setEditingId(course.id);
+    setOriginalLevel(course.level);
+    setOriginalCategory(course.category);
+    const courseDraft = fromCourse(course);
+    setOriginalEditableContent({
+      short_description: courseDraft.short_description,
+      benefits: courseDraft.benefits,
+    });
+    setLevelChanged(false);
+    setDraft({ ...courseDraft, level: canonicalLevel(course.level) });
+    setCustomCategory(false);
+    setNotice(null);
+    setError(null);
+    setFormError(null);
+    setEditorOpen(true);
+  }
+
   async function saveCourse(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const wasEditing = editingId !== null;
@@ -277,7 +303,10 @@ export default function CourseManagement({ token }: { token: string }) {
     const benefitsChanged =
       !wasEditing || draft.benefits !== originalEditableContent.benefits;
 
-    if (shortDescriptionChanged && countCharacters(draft.short_description) > 100) {
+    if (
+      shortDescriptionChanged &&
+      countCharacters(draft.short_description) > 100
+    ) {
       setFormError("Short description must be no more than 100 characters.");
       return;
     }
@@ -285,7 +314,18 @@ export default function CourseManagement({ token }: { token: string }) {
       setFormError("Benefits must contain no more than 5 non-empty lines.");
       return;
     }
-
+    const rawInternshipMonths = draft.internship_duration_months?.trim();
+    let internshipDurationMonths: number | null = null;
+    if (rawInternshipMonths) {
+      const parsed = Number(rawInternshipMonths);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 60) {
+        setFormError(
+          "Internship duration must be a whole number of months (at least 1)."
+        );
+        return;
+      }
+      internshipDurationMonths = parsed;
+    }
     setSaving(true);
     setError(null);
     setFormError(null);
@@ -293,6 +333,8 @@ export default function CourseManagement({ token }: { token: string }) {
     const payload = {
       ...draft,
       slug: editingId ? draft.slug : slugFromTitle(draft.title),
+      internship_duration_months: internshipDurationMonths,
+      internship_period: internshipDurationMonths,
       ...(editingId && !levelChanged ? { level: undefined } : {}),
       ...(editingId && draft.category === originalCategory
         ? { category: undefined }
@@ -310,9 +352,7 @@ export default function CourseManagement({ token }: { token: string }) {
     };
     try {
       await courseRequest<Course>(
-        editingId
-          ? `/api/admin/courses/${editingId}`
-          : "/api/admin/courses",
+        editingId ? `/api/admin/courses/${editingId}` : "/api/admin/courses",
         token,
         {
           method: editingId ? "PATCH" : "POST",
@@ -341,7 +381,9 @@ export default function CourseManagement({ token }: { token: string }) {
         method: "PATCH",
         body: JSON.stringify({ is_published: !course.is_published }),
       });
-      setNotice(course.is_published ? "Course unpublished." : "Course published.");
+      setNotice(
+        course.is_published ? "Course unpublished." : "Course published."
+      );
       await loadCourses();
     } catch (requestError) {
       setError(messageFrom(requestError));
@@ -351,7 +393,8 @@ export default function CourseManagement({ token }: { token: string }) {
   }
 
   async function deleteCourse(course: Course) {
-    if (!window.confirm(`Delete "${course.title}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete "${course.title}"? This cannot be undone.`))
+      return;
     setSaving(true);
     setError(null);
     setNotice(null);
@@ -361,7 +404,14 @@ export default function CourseManagement({ token }: { token: string }) {
       });
       setNotice("Course deleted.");
       if (editingId === course.id) resetEditor();
-      await loadCourses();
+      const nextTotal = Math.max(0, total - 1);
+      const lastPageOffset = Math.max(0, Math.ceil(nextTotal / PAGE_SIZE) - 1) * PAGE_SIZE;
+      const targetOffset = Math.min(offset, lastPageOffset);
+      if (targetOffset !== offset) {
+        setOffset(targetOffset);
+      } else {
+        await loadCourses(targetOffset);
+      }
       await loadCategories();
     } catch (requestError) {
       setError(messageFrom(requestError));
@@ -411,24 +461,6 @@ export default function CourseManagement({ token }: { token: string }) {
     }
   }
 
-  function editCourse(course: Course) {
-    setEditingId(course.id);
-    setOriginalLevel(course.level);
-    setOriginalCategory(course.category);
-    const courseDraft = fromCourse(course);
-    setOriginalEditableContent({
-      short_description: courseDraft.short_description,
-      benefits: courseDraft.benefits,
-    });
-    setLevelChanged(false);
-    setEditorOpen(true);
-    setDraft({ ...courseDraft, level: canonicalLevel(course.level) });
-    setCustomCategory(false);
-    setNotice(null);
-    setError(null);
-    setFormError(null);
-  }
-
   const inputClass =
     "mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100";
   const labelClass = "block text-sm font-medium text-slate-700";
@@ -449,41 +481,30 @@ export default function CourseManagement({ token }: { token: string }) {
     editingId !== null &&
     benefitsOverLimit &&
     draft.benefits === originalEditableContent.benefits;
-  const pageCount = Math.ceil(total / PAGE_SIZE);
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-  const firstPageNumber = Math.max(1, Math.min(currentPage - 2, pageCount - 4));
-  const pageNumbers = Array.from(
-    { length: Math.min(pageCount, 5) },
-    (_, index) => firstPageNumber + index
-  );
-  const rangeStart = total === 0 ? 0 : offset + 1;
-  const rangeEnd = Math.min(offset + courses.length, total);
 
   return (
-    <section className="mx-auto mt-5 max-w-7xl" aria-labelledby="courses-heading">
-      <header className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="mx-auto max-w-7xl">
+      {/* Page Header matching Admin Internships UI */}
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 id="courses-heading" className="text-2xl font-semibold tracking-tight text-slate-950">
-            Course Management
+          <h2 className="text-xl font-semibold tracking-tight text-slate-950">
+            Course management
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            Manage your courses, modes, and course information.
+            Manage training courses and programmes separately from standalone internships.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
+            className="inline-flex min-h-10 items-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600"
             onClick={() => setManageCategoriesOpen((open) => !open)}
             type="button"
           >
             <FolderOpen aria-hidden="true" size={17} />
             Manage Categories
           </button>
-          <span className="rounded-full border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700">
-            {total} {total === 1 ? "course" : "courses"}
-          </span>
           <button
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-10 items-center gap-2 rounded-full bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 disabled:opacity-60"
             disabled={saving}
             onClick={() => {
               setEditingId(null);
@@ -499,45 +520,72 @@ export default function CourseManagement({ token }: { token: string }) {
             }}
             type="button"
           >
-            <Plus aria-hidden="true" size={17} />
-            Add Course
+            <Plus aria-hidden="true" size={17} /> Add Course
           </button>
         </div>
-      </header>
+      </div>
 
+      {notice && (
+        <p
+          className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"
+          role="status"
+        >
+          {notice}
+        </p>
+      )}
+      {error && (
+        <p
+          className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+          role="alert"
+        >
+          {error}
+        </p>
+      )}
+
+      {/* Category Management Drawer */}
       {manageCategoriesOpen && (
         <section
           aria-labelledby="manage-categories-heading"
-          className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+          className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
         >
-          <header className="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <h3
-              className="font-semibold text-slate-950"
-              id="manage-categories-heading"
+          <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+            <div>
+              <h3
+                className="font-semibold text-slate-950"
+                id="manage-categories-heading"
+              >
+                Manage Categories
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Deleting a category keeps every course and its saved details.
+              </p>
+            </div>
+            <button
+              aria-label="Close category manager"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+              onClick={() => setManageCategoriesOpen(false)}
+              type="button"
             >
-              Manage Categories
-            </h3>
-            <p className="mt-1 text-sm text-slate-600">
-              Deleting a category keeps every course and its saved details.
-            </p>
-          </header>
+              <X aria-hidden="true" size={17} />
+            </button>
+          </div>
           {categoriesError ? (
-            <p className="p-5 text-sm text-red-700" role="alert">
+            <p className="mt-4 text-sm text-red-700" role="alert">
               Could not load categories: {categoriesError}
             </p>
           ) : categoriesLoading ? (
-            <p className="p-5 text-sm text-slate-600" role="status">
+            <p className="mt-4 text-sm text-slate-600" role="status">
               Loading categories…
             </p>
           ) : categories.length === 0 ? (
-            <p className="p-5 text-sm text-slate-600">
+            <p className="mt-4 text-sm text-slate-600">
               No available categories.
             </p>
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <ul className="mt-3 divide-y divide-slate-100">
               {categories.map((category) => (
                 <li
-                  className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+                  className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"
                   key={category.name}
                 >
                   <div className="min-w-0">
@@ -551,15 +599,13 @@ export default function CourseManagement({ token }: { token: string }) {
                     </p>
                   </div>
                   <button
-                    className="inline-flex min-h-9 items-center justify-center gap-2 self-start rounded-lg border border-red-200 px-3.5 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:self-auto"
+                    className="inline-flex min-h-9 items-center justify-center gap-1.5 self-start rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-50 sm:self-auto"
                     disabled={deletingCategory !== null}
                     onClick={() => void deleteCategory(category)}
                     type="button"
                   >
                     <Trash2 aria-hidden="true" size={15} />
-                    {deletingCategory === category.name
-                      ? "Deleting…"
-                      : "Delete"}
+                    {deletingCategory === category.name ? "Deleting…" : "Delete"}
                   </button>
                 </li>
               ))}
@@ -568,154 +614,180 @@ export default function CourseManagement({ token }: { token: string }) {
         </section>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-4 sm:p-5">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(240px,1.5fr)_repeat(3,minmax(150px,1fr))]">
-            <label className={`${labelClass} relative`}>
-              <span className="sr-only">Search courses</span>
-              <Search
-                aria-hidden="true"
-                className="absolute left-3 top-[calc(50%+4px)] -translate-y-1/2 text-slate-400"
-                size={17}
-              />
-              <input
-                className={`${inputClass} pl-9`}
-                onChange={(event) => {
-                  setOffset(0);
-                  setSearch(event.target.value);
-                }}
-                placeholder="Search title, slug, or category"
-                type="search"
-                value={search}
-              />
-            </label>
-            <label className={labelClass}>
-              <span className="sr-only">Filter by course type</span>
-              <select
-                className={inputClass}
-                onChange={(event) => {
-                  setOffset(0);
-                  setTypeFilter(event.target.value);
-                }}
-                value={typeFilter}
-              >
-                <option value="">All types</option>
-                <option value="course">Course</option>
-                <option value="internship">Internship</option>
-                <option value="programme">Programme</option>
-              </select>
-            </label>
-            <label className={labelClass}>
-              <span className="sr-only">Filter by category</span>
-              <select
-                className={inputClass}
-                onChange={(event) => {
-                  setOffset(0);
-                  setCategoryFilter(event.target.value);
-                }}
-                value={categoryFilter}
-              >
-                <option value="">All categories</option>
-                {categories.map((category) => (
-                  <option key={category.name} value={category.name}>
-                    {category.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={labelClass}>
-              <span className="sr-only">Filter by publication status</span>
-              <select
-                className={inputClass}
-                onChange={(event) => {
-                  setOffset(0);
-                  setPublishedFilter(event.target.value);
-                }}
-                value={publishedFilter}
-              >
-                <option value="">All publication states</option>
-                <option value="true">Published</option>
-                <option value="false">Unpublished</option>
-              </select>
-            </label>
-          </div>
-          {error && (
-            <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-800" role="alert">
-              {error}
-            </p>
-          )}
-          {notice && (
-            <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm text-emerald-800" role="status">
-              {notice}
-            </p>
-          )}
-        </div>
+      {/* Search and Filters matching Admin Internships layout */}
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.5fr)_10rem_12rem_11rem]">
+        <label className="relative block">
+          <span className="sr-only">Search courses</span>
+          <Search
+            aria-hidden="true"
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            size={17}
+          />
+          <input
+            className="min-h-11 w-full rounded-xl border border-slate-300 bg-white pl-10 pr-3 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => {
+              setOffset(0);
+              setSearch(event.target.value);
+            }}
+            placeholder="Search courses..."
+            type="search"
+            value={search}
+          />
+        </label>
+        <label className="block">
+          <span className="sr-only">Filter by offering type</span>
+          <select
+            className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => {
+              setOffset(0);
+              setTypeFilter(event.target.value as CourseType);
+            }}
+            value={typeFilter}
+          >
+            <option value="course">Course</option>
+            <option value="programme">Programme</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="sr-only">Filter by category</span>
+          <select
+            className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => {
+              setOffset(0);
+              setCategoryFilter(event.target.value);
+            }}
+            value={categoryFilter}
+          >
+            <option value="">All categories</option>
+            {categories.map((category) => (
+              <option key={category.name} value={category.name}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="sr-only">Filter by publication status</span>
+          <select
+            className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-100"
+            onChange={(event) => {
+              setOffset(0);
+              setPublishedFilter(event.target.value);
+            }}
+            value={publishedFilter}
+          >
+            <option value="">All statuses</option>
+            <option value="true">Published</option>
+            <option value="false">Draft</option>
+          </select>
+        </label>
+      </div>
 
-        {loading ? (
-          <p className="p-6 text-sm text-slate-600" role="status">
-            Loading courses…
-          </p>
-        ) : courses.length === 0 ? (
-          <div className="p-8 text-center">
-            <BookOpen aria-hidden="true" className="mx-auto text-slate-400" size={28} />
-            <h3 className="mt-3 font-semibold text-slate-900">
-              {total === 0 ? "No courses found" : "No courses on this page"}
-            </h3>
-            <p className="mt-1 text-sm text-slate-600">
-              {total === 0
-                ? "Add a course or adjust your search and filters."
-                : "Try another page or update your search and filters."}
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {courses.map((course) => (
-              <li
-                className="flex flex-col gap-4 px-4 py-4 sm:px-5 md:flex-row md:items-center md:justify-between"
+      {/* Courses List as 2-column Card Grid matching Internships Page */}
+      {loading ? (
+        <p
+          className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600"
+          role="status"
+        >
+          Loading courses…
+        </p>
+      ) : courses.length > 0 ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {courses.map((course) => {
+            const rawInternship =
+              course.internship_duration_months != null
+                ? course.internship_duration_months
+                : course.internship_period != null
+                ? course.internship_period
+                : null;
+            const hasInternship =
+              rawInternship != null &&
+              !Number.isNaN(Number(rawInternship)) &&
+              Number(rawInternship) > 0;
+            const parsedInternship = hasInternship ? Number(rawInternship) : null;
+            const formattedPrice = coursePrice(course.price);
+
+            return (
+              <article
+                className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-4 sm:p-5 md:p-6"
                 key={course.id}
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="break-words font-semibold text-slate-950">
-                      {course.title}
-                    </h3>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium capitalize text-slate-700">
-                      {course.course_type}
+                <div>
+                  <div className="flex items-start gap-2.5 sm:gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-800">
+                      <BookOpen aria-hidden="true" size={19} />
                     </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h3 className="break-words font-semibold text-slate-950 text-base leading-snug">
+                          {course.title}
+                        </h3>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium capitalize text-slate-700">
+                          {course.course_type}
+                        </span>
+                        {course.is_featured && (
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                            Featured
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs sm:text-sm text-slate-600 break-words">
+                        {course.category} · {course.duration}
+                        {course.level && ` · ${course.level}`}
+                        {course.delivery_mode && ` · ${course.delivery_mode}`}
+                        {formattedPrice && ` · ${formattedPrice}`}
+                      </p>
+                    </div>
                     <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
                         course.is_published
                           ? "bg-emerald-50 text-emerald-800"
                           : "bg-slate-100 text-slate-600"
                       }`}
                     >
-                      {course.is_published ? "Published" : "Unpublished"}
+                      {course.is_published ? "Published" : "Draft"}
                     </span>
                   </div>
-                  <p className="mt-1.5 line-clamp-2 text-sm text-slate-600">
+
+                  <p className="mt-3 sm:mt-4 line-clamp-2 text-sm leading-6 text-slate-700 break-words">
                     {course.short_description}
                   </p>
-                  <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-                    <span>{course.category}</span>
-                    <span>{course.duration}</span>
-                    <span>{course.level}</span>
-                    <span className="font-medium text-sky-800">
-                      {course.delivery_mode}
+
+                  {/* Course Metadata Badges */}
+                  <div className="mt-3 flex flex-wrap gap-1.5 sm:gap-2 text-xs">
+                    <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+                      Training: {course.duration}
                     </span>
-                    {course.price !== null && <span>₹{course.price}</span>}
-                  </p>
+                    {hasInternship && (
+                      <span className="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1 font-medium text-sky-800">
+                        Internship: {parsedInternship} Month{parsedInternship === 1 ? "" : "s"}*
+                      </span>
+                    )}
+                    {course.certificates && course.certificates.length > 0 && (
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600">
+                        Certificates: {course.certificates.length}
+                      </span>
+                    )}
+                    {course.card_theme && (
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 capitalize text-slate-600">
+                        Theme: {course.card_theme}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2 md:shrink-0">
+
+                {/* Actions Row with accessible touch targets */}
+                <div className="mt-4 sm:mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-3.5 sm:pt-4">
                   <button
-                    className="min-h-9 rounded-lg border border-slate-300 px-3.5 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 disabled:opacity-50"
+                    className="inline-flex min-h-10 flex-1 sm:flex-initial items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3.5 text-sm font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
                     disabled={saving}
                     onClick={() => editCourse(course)}
                     type="button"
                   >
-                    Edit
+                    <Pencil aria-hidden="true" size={15} /> Edit
                   </button>
                   <button
-                    className="min-h-9 rounded-lg border border-sky-200 px-3.5 py-1.5 text-sm font-medium text-sky-800 transition-colors hover:bg-sky-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-700 focus-visible:ring-offset-2 disabled:opacity-50"
+                    className="inline-flex min-h-10 flex-1 sm:flex-initial items-center justify-center rounded-lg border border-slate-300 px-3.5 text-sm font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
                     disabled={saving}
                     onClick={() => void togglePublication(course)}
                     type="button"
@@ -723,91 +795,66 @@ export default function CourseManagement({ token }: { token: string }) {
                     {course.is_published ? "Unpublish" : "Publish"}
                   </button>
                   <button
-                    className="min-h-9 rounded-lg border border-red-200 px-3.5 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 disabled:opacity-50"
+                    className="inline-flex min-h-10 w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg border border-red-200 px-3.5 text-sm font-medium text-red-700 hover:bg-red-50 active:bg-red-100 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2"
                     disabled={saving}
                     onClick={() => void deleteCourse(course)}
                     type="button"
                   >
-                    Delete
+                    <Trash2 aria-hidden="true" size={15} /> Delete
                   </button>
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <footer className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <p className="text-sm text-slate-600" aria-live="polite">
-            Showing {rangeStart}–{rangeEnd} of {total} courses
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white p-6">
+          <h3 className="font-semibold text-slate-900">No course records</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            {search || categoryFilter || publishedFilter
+              ? "No courses match these filters."
+              : "Create a course here. It will remain a draft until published."}
           </p>
-          <nav aria-label="Course pagination" className="flex flex-wrap items-center gap-1.5">
-            <button
-              aria-label="Previous page"
-              className="inline-flex min-h-9 items-center gap-1 rounded-lg border border-slate-300 px-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={offset === 0 || loading}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              type="button"
-            >
-              <ChevronLeft aria-hidden="true" size={16} />
-              Previous
-            </button>
-            {pageNumbers.map((pageNumber) => (
-              <button
-                aria-current={pageNumber === currentPage ? "page" : undefined}
-                aria-label={`Page ${pageNumber}`}
-                className={`inline-flex h-9 min-w-9 items-center justify-center rounded-lg border px-2 text-sm font-medium transition-colors ${
-                  pageNumber === currentPage
-                    ? "border-blue-700 bg-blue-700 text-white"
-                    : "border-slate-300 text-slate-700 hover:bg-slate-50"
-                }`}
-                key={pageNumber}
-                onClick={() => setOffset((pageNumber - 1) * PAGE_SIZE)}
-                type="button"
-              >
-                {pageNumber}
-              </button>
-            ))}
-            <button
-              aria-label="Next page"
-              className="inline-flex min-h-9 items-center gap-1 rounded-lg border border-slate-300 px-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={offset + courses.length >= total || loading}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-              type="button"
-            >
-              Next
-              <ChevronRight aria-hidden="true" size={16} />
-            </button>
-          </nav>
-        </footer>
-      </div>
+        </div>
+      )}
 
+      {/* Responsive Pagination */}
+      <AdminPagination
+        itemLabel="courses"
+        loading={loading}
+        offset={offset}
+        onPageChange={(newOffset) => setOffset(newOffset)}
+        pageSize={PAGE_SIZE}
+        total={total}
+      />
+
+      {/* Editor Modal matching Internships Editor Modal */}
       {editorOpen && (
-        <dialog
+        <div
           aria-labelledby="course-editor-title"
-          aria-describedby="course-editor-description"
-          className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-0 text-slate-900 shadow-2xl backdrop:bg-slate-950/50"
-          onCancel={(event) => {
-            if (saving) event.preventDefault();
-            else resetEditor();
-          }}
-          ref={dialogRef}
+          aria-modal="true"
+          className="fixed inset-0 z-[60] flex items-end justify-center overflow-y-auto bg-slate-950/50 p-0 sm:items-center sm:p-5"
+          role="dialog"
         >
-          <form className="p-5 sm:p-7" onSubmit={saveCourse}>
+          <form
+            className="my-auto max-h-[100dvh] w-full max-w-4xl overflow-y-auto rounded-t-2xl bg-white p-5 shadow-2xl sm:max-h-[calc(100dvh-2.5rem)] sm:rounded-2xl sm:p-7"
+            onSubmit={saveCourse}
+          >
             <header className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
                   Course details
                 </p>
-                <h2 id="course-editor-title" className="mt-1 text-xl font-semibold tracking-tight">
+                <h2
+                  className="mt-1 text-xl font-semibold tracking-tight text-slate-950"
+                  id="course-editor-title"
+                >
                   {editingId ? "Edit Course" : "Add Course"}
                 </h2>
-                <p id="course-editor-description" className="mt-1 text-sm text-slate-600">
-                  Update the course information and delivery options.
-                </p>
               </div>
               <button
                 aria-label="Close course editor"
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 disabled:opacity-50"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
                 disabled={saving}
                 onClick={resetEditor}
                 type="button"
@@ -817,44 +864,64 @@ export default function CourseManagement({ token }: { token: string }) {
             </header>
 
             {formError && (
-              <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-800" role="alert">
+              <p
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-800"
+                role="alert"
+              >
                 {formError}
               </p>
             )}
 
-            <div className="mt-5 grid gap-x-4 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-5 grid gap-x-4 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="sm:col-span-2 lg:col-span-3">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Overview
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Set the course title, category, training duration, and optional internship duration.
+                </p>
+              </div>
+
               <label className={labelClass}>
                 Course title
                 <input
                   className={inputClass}
                   maxLength={160}
                   minLength={2}
-                  onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-                  ref={titleInputRef}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      title: event.target.value,
+                      ...(!editingId ? { slug: slugFromTitle(event.target.value) } : {}),
+                    })
+                  }
                   required
                   value={draft.title}
                 />
               </label>
+
               <label className={labelClass}>
                 Offering type
                 <select
                   className={inputClass}
                   onChange={(event) =>
-                    setDraft({ ...draft, course_type: event.target.value as CourseType })
+                    setDraft({
+                      ...draft,
+                      course_type: event.target.value as CourseType,
+                    })
                   }
                   value={draft.course_type}
                 >
                   <option value="course">Course</option>
-                  <option value="internship">Internship</option>
+                  {editingId !== null && draft.course_type === "internship" && (
+                    <option value="internship">
+                      Legacy course catalogue internship
+                    </option>
+                  )}
                   <option value="programme">Programme</option>
                 </select>
-                {draft.course_type === "internship" && (
-                  <span className="text-xs font-normal leading-5 text-slate-500">
-                    Published internship offerings appear in the public Internship
-                    Opportunities section.
-                  </span>
-                )}
               </label>
+
               <label className={labelClass}>
                 Category
                 <select
@@ -898,16 +965,40 @@ export default function CourseManagement({ token }: { token: string }) {
                   />
                 )}
               </label>
+
               <label className={labelClass}>
-                Duration
+                Training duration
                 <input
                   className={inputClass}
                   maxLength={80}
-                  onChange={(event) => setDraft({ ...draft, duration: event.target.value })}
+                  onChange={(event) =>
+                    setDraft({ ...draft, duration: event.target.value })
+                  }
+                  placeholder="e.g. 4 Months or 12 Weeks"
                   required
                   value={draft.duration}
                 />
               </label>
+
+              <label className={labelClass}>
+                Internship duration in months (optional)
+                <input
+                  className={inputClass}
+                  max={60}
+                  min={1}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      internship_duration_months: event.target.value,
+                    })
+                  }
+                  placeholder="e.g. 2 (leave blank if none)"
+                  step={1}
+                  type="number"
+                  value={draft.internship_duration_months}
+                />
+              </label>
+
               <label className={labelClass}>
                 Level
                 <select
@@ -935,6 +1026,7 @@ export default function CourseManagement({ token }: { token: string }) {
                   ))}
                 </select>
               </label>
+
               <label className={labelClass}>
                 Mode
                 <select
@@ -947,8 +1039,10 @@ export default function CourseManagement({ token }: { token: string }) {
                 >
                   {!DELIVERY_MODES.some((mode) => mode === draft.delivery_mode) &&
                     draft.delivery_mode && (
-                    <option value={draft.delivery_mode}>{draft.delivery_mode}</option>
-                  )}
+                      <option value={draft.delivery_mode}>
+                        {draft.delivery_mode}
+                      </option>
+                    )}
                   {DELIVERY_MODES.map((mode) => (
                     <option key={mode} value={mode}>
                       {mode}
@@ -956,40 +1050,23 @@ export default function CourseManagement({ token }: { token: string }) {
                   ))}
                 </select>
               </label>
+
               <label className={labelClass}>
-                Price (optional)
+                Course fee (₹, optional)
                 <input
                   className={inputClass}
-                  min="0"
                   max="99999999.99"
-                  onChange={(event) => setDraft({ ...draft, price: event.target.value })}
+                  min="0"
+                  onChange={(event) =>
+                    setDraft({ ...draft, price: event.target.value })
+                  }
+                  placeholder="e.g. 15000"
                   step="0.01"
                   type="number"
                   value={draft.price}
                 />
               </label>
-              <label className={labelClass}>
-                Image URL (optional)
-                <input
-                  className={inputClass}
-                  maxLength={2048}
-                  onChange={(event) => setDraft({ ...draft, image_url: event.target.value })}
-                  type="url"
-                  value={draft.image_url}
-                />
-                {draft.image_url.trim() && (
-                  <CourseImage
-                    alt={`${draft.title || "Course"} image preview`}
-                    className="mt-2 aspect-video w-full rounded-lg border border-slate-200 object-cover"
-                    fallback={
-                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                        Image preview unavailable. Check the URL.
-                      </p>
-                    }
-                    src={draft.image_url.trim()}
-                  />
-                )}
-              </label>
+
               <label className={labelClass}>
                 Card theme
                 <select
@@ -1009,12 +1086,38 @@ export default function CourseManagement({ token }: { token: string }) {
                   <option value="violet">Soft violet</option>
                 </select>
               </label>
+
+              <label className={`${labelClass} sm:col-span-2 lg:col-span-3`}>
+                Cover image URL (optional)
+                <input
+                  className={inputClass}
+                  maxLength={2048}
+                  onChange={(event) =>
+                    setDraft({ ...draft, image_url: event.target.value })
+                  }
+                  type="url"
+                  value={draft.image_url}
+                />
+                {draft.image_url.trim() && (
+                  <CourseImage
+                    alt={`${draft.title || "Course"} preview`}
+                    className="mt-2 aspect-video w-full rounded-lg border border-slate-200 object-cover"
+                    fallback={
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                        Image preview unavailable. Check the URL.
+                      </p>
+                    }
+                    src={draft.image_url.trim()}
+                  />
+                )}
+              </label>
+
               <label className={`${labelClass} sm:col-span-2 lg:col-span-3`}>
                 Short description
                 <textarea
-                  className={inputClass}
-                  aria-describedby="short-description-counter short-description-validation"
+                  aria-describedby="short-description-counter"
                   aria-invalid={shortDescriptionOverLimit && !shortDescriptionLegacy}
+                  className={inputClass}
                   onChange={(event) =>
                     setDraft({
                       ...draft,
@@ -1030,32 +1133,16 @@ export default function CourseManagement({ token }: { token: string }) {
                 <span
                   className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500"
                   id="short-description-counter"
-                  aria-live="polite"
                 >
                   <span>{shortDescriptionCharacters} / 100 characters</span>
                   {shortDescriptionLegacy && (
                     <span className="text-amber-700">
-                      Saved description exceeds the new limit; shorten it to
-                      update this field.
+                      Saved description exceeds 100 characters; edit to update.
                     </span>
                   )}
                 </span>
-                <span
-                  className={
-                    shortDescriptionOverLimit && !shortDescriptionLegacy
-                      ? "mt-1 block text-xs text-red-700"
-                      : "sr-only"
-                  }
-                  id="short-description-validation"
-                  role={
-                    shortDescriptionOverLimit && !shortDescriptionLegacy
-                      ? "alert"
-                      : undefined
-                  }
-                >
-                  Short description must be no more than 100 characters.
-                </span>
               </label>
+
               <label className={`${labelClass} sm:col-span-2 lg:col-span-3`}>
                 Full description
                 <textarea
@@ -1069,66 +1156,61 @@ export default function CourseManagement({ token }: { token: string }) {
                   value={draft.full_description}
                 />
               </label>
+
+              <div className="sm:col-span-2 lg:col-span-3">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Curriculum and credentials
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Add learning outcomes and completion certificates offered.
+                </p>
+              </div>
+
               <details
-                className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-3"
+                className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-2"
                 open={benefitsOverLimit || undefined}
               >
-                <summary className="cursor-pointer px-4 py-3.5 text-sm font-semibold text-slate-800">
-                  Course / Internship / Program Benefits
+                <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-slate-800 marker:content-none">
+                  Benefits / key outcomes
+                  <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-900">
+                    {benefitLines} / 5 lines
+                  </span>
                 </summary>
                 <div className="border-t border-slate-200 p-4">
                   <label className={labelClass}>
-                    Benefits (one per line)
+                    Enter one benefit per line (maximum 5 lines)
                     <textarea
-                      className={inputClass}
-                      aria-describedby="benefits-counter benefits-validation"
+                      aria-describedby="benefits-counter"
                       aria-invalid={benefitsOverLimit && !benefitsLegacy}
+                      className={inputClass}
                       maxLength={10000}
                       onChange={(event) =>
                         setDraft({ ...draft, benefits: event.target.value })
                       }
-                      rows={6}
+                      placeholder={"Hands-on real-world projects\n1-on-1 industry mentorship\nJob assistance"}
+                      rows={4}
                       value={draft.benefits}
                     />
-                    <span
-                      className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500"
-                      id="benefits-counter"
-                      aria-live="polite"
-                    >
-                      <span>{benefitLines} / 5 lines</span>
-                      {benefitsLegacy && (
-                        <span className="text-amber-700">
-                          Saved benefits exceed the new limit. Reduce them to
-                          5 lines before changing this field.
-                        </span>
-                      )}
-                    </span>
-                    <span
-                      className={
-                        benefitsOverLimit && !benefitsLegacy
-                          ? "mt-1 block text-xs text-red-700"
-                          : "sr-only"
-                      }
-                      id="benefits-validation"
-                      role={
-                        benefitsOverLimit && !benefitsLegacy
-                          ? "alert"
-                          : undefined
-                      }
-                    >
-                      Benefits must contain no more than 5 non-empty lines.
-                    </span>
                   </label>
+                  {benefitsLegacy && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      Saved benefits exceed 5 lines; reduce them to update.
+                    </p>
+                  )}
                 </div>
               </details>
-              <details className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-3">
-                <summary className="cursor-pointer px-4 py-3.5 text-sm font-semibold text-slate-800">
+
+              <details className="rounded-xl border border-slate-200 bg-slate-50 sm:col-span-2 lg:col-span-1">
+                <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-slate-800 marker:content-none">
                   Certificates
+                  <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-900">
+                    {draft.certificates.length} selected
+                  </span>
                 </summary>
-                <div className="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-2">
+                <div className="space-y-3 border-t border-slate-200 p-4">
                   {COURSE_CERTIFICATES.map((certificate) => (
                     <label
-                      className="inline-flex items-start gap-2 text-sm text-slate-700"
+                      className="flex items-start gap-2.5 text-sm leading-5 text-slate-700"
                       key={certificate}
                     >
                       <input
@@ -1151,6 +1233,16 @@ export default function CourseManagement({ token }: { token: string }) {
                   ))}
                 </div>
               </details>
+
+              <div className="sm:col-span-2 lg:col-span-3">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  Publishing and settings
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Set the display priority and public availability.
+                </p>
+              </div>
+
               <label className={labelClass}>
                 Display order
                 <input
@@ -1158,14 +1250,19 @@ export default function CourseManagement({ token }: { token: string }) {
                   max="100000"
                   min="0"
                   onChange={(event) =>
-                    setDraft({ ...draft, display_order: Number(event.target.value) })
+                    setDraft({
+                      ...draft,
+                      display_order: Number(event.target.value),
+                    })
                   }
+                  step={1}
                   type="number"
                   value={draft.display_order}
                 />
               </label>
-              <div className="flex flex-wrap items-end gap-5 pb-2">
-                <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+
+              <div className="flex flex-wrap items-center gap-6 sm:col-span-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                   <input
                     checked={draft.is_published}
                     className="h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
@@ -1176,7 +1273,7 @@ export default function CourseManagement({ token }: { token: string }) {
                   />
                   Published
                 </label>
-                <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                   <input
                     checked={draft.is_featured}
                     className="h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600"
@@ -1190,9 +1287,9 @@ export default function CourseManagement({ token }: { token: string }) {
               </div>
             </div>
 
-            <footer className="mt-6 flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+            <div className="mt-6 flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-4">
               <button
-                className="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                className="min-h-10 rounded-full border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 disabled={saving}
                 onClick={resetEditor}
                 type="button"
@@ -1200,16 +1297,20 @@ export default function CourseManagement({ token }: { token: string }) {
                 Cancel
               </button>
               <button
-                className="min-h-10 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-h-10 rounded-full bg-blue-700 px-5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
                 disabled={saving}
                 type="submit"
               >
-                {saving ? "Saving…" : editingId ? "Save Changes" : "Create Course"}
+                {saving
+                  ? "Saving..."
+                  : editingId
+                  ? "Save changes"
+                  : "Create course"}
               </button>
-            </footer>
+            </div>
           </form>
-        </dialog>
+        </div>
       )}
-    </section>
+    </div>
   );
 }

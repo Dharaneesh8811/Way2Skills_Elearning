@@ -5,6 +5,7 @@ from app.api.routes import (
     admin_categories,
     admin_courses,
     admin_feedback,
+    admin_internships,
     admissions,
     auth,
     contact,
@@ -26,6 +27,11 @@ api_router.include_router(
 )
 api_router.include_router(
     admin_feedback.router, prefix="/admin/feedback", tags=["admin feedback"]
+)
+api_router.include_router(
+    admin_internships.router,
+    prefix="/admin/internships",
+    tags=["admin internships"],
 )
 api_router.include_router(courses.router, prefix="/courses", tags=["courses"])
 api_router.include_router(courses.internships_router, prefix="/internships", tags=["internships"])

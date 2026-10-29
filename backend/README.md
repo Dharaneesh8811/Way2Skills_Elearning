@@ -105,9 +105,11 @@ alembic upgrade head
 
 `alembic upgrade head` applies the foundation, course, UUID, feedback, and
 course-details migrations, followed by the archiveable course-category
-registry and the course-content limits migration. The category migration copies
-existing distinct category names into the registry; it does not modify or
-delete course rows.
+registry, the course-content limits migration, the optional legacy course
+internship-period migration, and separate internship catalogue, cover image,
+and learning outcome migrations.
+The category migration copies existing distinct category names into the
+registry; it does not modify or delete course rows.
 The UUID migration assigns UUID primary keys to admins, contacts, admissions,
 and courses while retaining each existing integer ID in a unique `legacy_id`
 column. Existing rows and their data are preserved; legacy integer record URLs
@@ -118,11 +120,18 @@ The course-details migration adds nullable curriculum and benefits fields and a
 JSON certificate-selection field defaulting to an empty list. Existing course
 prices, image URLs, and other data are preserved.
 The course-category migration creates a category registry for admin-managed
-availability. Archiving a category leaves each course's saved category text and
-all course data unchanged.
+availability. Archiving a category leaves each course's saved category text
+and all course data unchanged.
 The course-content limits migration changes the short description column from
 `VARCHAR(300)` to `TEXT`; this preserves existing content and accommodates
 future description limit changes.
+The internship-period migration adds a nullable positive whole-month duration
+to legacy course records. It is not used to create or display internship
+opportunities.
+The separate internship migration creates an independent internship table and
+does not convert or modify existing course records.
+Later internship migrations add an optional cover image URL and a list of
+learning outcomes while preserving existing internship records.
 Existing description content is preserved.
 
 ## 6. Create the first administrator
@@ -184,13 +193,19 @@ All API routes are under `/api`:
 | `PATCH` | `/admin/admissions/{id}` | Admin JWT | Update admission status |
 | `GET` | `/courses` | Public | List published offerings |
 | `GET` | `/courses/{slug}` | Public | Published offering details |
-| `GET` | `/internships` | Public | Published internships only |
+| `GET` | `/internships` | Public | Published records from the separate internship catalogue |
+| `GET` | `/internships/{slug}` | Public | Published internship detail |
 | `GET` | `/programmes` | Public | Published programmes only |
 | `GET` | `/admin/courses` | Admin JWT | Search/filter/paginate all courses |
 | `POST` | `/admin/courses` | Admin JWT | Create a course |
 | `GET` | `/admin/courses/{id}` | Admin JWT | Retrieve a course for editing |
 | `PATCH` | `/admin/courses/{id}` | Admin JWT | Edit or publish/unpublish a course |
 | `DELETE` | `/admin/courses/{id}` | Admin JWT | Delete if no admission references it |
+| `GET` | `/admin/internships` | Admin JWT | Search/filter/paginate internship records |
+| `POST` | `/admin/internships` | Admin JWT | Create a separate internship |
+| `GET` | `/admin/internships/{id}` | Admin JWT | Retrieve an internship for editing |
+| `PATCH` | `/admin/internships/{id}` | Admin JWT | Edit or publish/unpublish an internship |
+| `DELETE` | `/admin/internships/{id}` | Admin JWT | Delete an internship |
 | `GET` | `/admin/categories` | Admin JWT | List available course categories and their course counts |
 | `DELETE` | `/admin/categories?name={name}` | Admin JWT | Archive a category without changing its courses |
 | `GET` | `/admin/feedback` | Admin JWT | List all feedback submissions |
@@ -202,21 +217,38 @@ default 0), `search` (up to 100 characters), and `status`. Contact statuses are
 `new`, `in_progress`, and `resolved`. Admission statuses are `pending`,
 `in_progress`, `accepted`, and `rejected`.
 
-`/courses` returns published `course` offerings; `/programmes` and
-`/internships` return their respective published types. List responses are
-ordered by `display_order` and then ID. Admin course list endpoints accept
+`/courses` returns published `course` offerings and `/programmes` returns
+published programme course records. `/internships` returns only records from the
+separate internship catalogue; legacy course records with type `internship` are
+not exposed as internship opportunities. Public list responses include
+published records only. Admin course list endpoints accept
 `limit` (1–100), `offset`, `search`, `course_type`,
 `category`, and `is_published`. A course stores its title/unique slug,
 descriptions, category/type, duration, level, delivery mode, optional image and
 price, syllabus entries, optional card theme, publication/featured flags, and
-display order. Valid types are `course`, `internship`, and `programme`; valid
-themes are `sky`, `mint`, `amber`, and `violet`. Public routes never return
+display order. Valid types are `course`, `internship`, and `programme`; existing
+`internship`-type course records remain for compatibility and are not separate
+internship opportunities. Valid themes are `sky`, `mint`, `amber`, and
+`violet`. Public routes never return
 unpublished offerings. Levels are `Beginner`, `Intermediate`, or `Advanced`;
 records with legacy level values remain unchanged unless an administrator
 selects a new level. Curriculum and benefits are optional multiline text fields,
 and certificates are an optional list of supported completion certificates.
 The image URL and price are optional. Deleting a course referenced by an
 admission is rejected with HTTP 409.
+
+Internships are stored independently from courses. Each record requires a title,
+unique slug, short/full descriptions, and positive duration in whole months.
+Cover image, eligibility, skills, learning outcomes, internship type, stipend
+details, dates, positions, application instructions, and application URL are
+optional. Admin internship list endpoints support `limit`, `offset`, `search`,
+and `is_published`.
+
+The frontend exposes `/cart` and `/internships/{slug}`. Cart contents are
+browser-local and persisted across frontend navigation/reloads. This repository
+does not provide a payment checkout route: courses continue to the existing
+admissions form, while internships use their optional application URL or
+details page.
 
 Contact submission accepts `name`, `email`, `message`, and optional `phone` and
 `topic`. Admission submission accepts `name`, `email`, `phone`, `education`,
@@ -235,8 +267,8 @@ validation errors do not echo submitted values.
    frontend `.env.local` without replacing other variables.
 3. Start the backend and frontend using the commands below.
 4. Sign in at `/admin` using the initial admin created with the CLI.
-5. Use **Course management** to add a course, internship, or programme. Set a
-   unique lowercase slug, descriptions, category, type, duration, level, and
+5. Use **Courses** to add a course or programme. Set a unique lowercase slug,
+   descriptions, category, type, duration, level, and
    delivery mode. Price and image URL are optional. Syllabus/outcomes and
    benefits are entered one item per line; curriculum keeps its line breaks.
    Expand the curriculum, benefits, and certificates sections to add their
@@ -244,10 +276,19 @@ validation errors do not echo submitted values.
 6. Choose one of the four card themes or leave **Automatic rotation** selected.
    Explicit themes are preserved; otherwise public cards rotate deterministically
    through sky, mint, amber, and violet.
-7. Publish the offering to make it available on the homepage (course/programme),
-   internship listing (internship type), details route, and applicable admission
-   selector. Unpublished entries remain admin-only.
-8. Edit or unpublish any entry from the list. Deletion requires confirmation and
+7. Publish the offering to make it available on the homepage, course/programme
+   listings, details route, and applicable admission selector. Unpublished
+   entries remain admin-only.
+8. Use **Internships** to add an independent internship record, including its
+   duration in months. Publish it to display it on the public Internship
+   Opportunities page. Course creation does not create an internship or add one
+   to any cart.
+9. Course and internship details/cards can add their respective records to the
+   shared browser-persisted cart. Course selections continue to the existing
+   admission form; internships link to their published details or optional
+   application URL. The cart does not calculate fees or treat stipend
+   information as a charge.
+10. Edit or unpublish any entry from the list. Course deletion requires confirmation and
    is blocked if an admission record references its slug.
 
 For the frontend, use a separate PowerShell terminal:

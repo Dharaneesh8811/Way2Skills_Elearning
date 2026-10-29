@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useRef, type CSSProperties, type PointerEvent } from "react";
 import { courseThemeFor, type Course } from "@/lib/coursesApi";
+import type { Internship } from "@/lib/internshipsApi";
 import CourseImage from "@/components/courses/CourseImage";
 
 const themeStyles = {
@@ -68,23 +69,57 @@ const typeLabels = {
   programme: "Programme",
 } as const;
 
-type CourseCardProps = {
+type CourseCardProps =
+  | {
   course: Course;
+  internship?: never;
+  index: number;
+}
+  | {
+  course?: never;
+  internship: Internship;
   index: number;
 };
 
-export default function CourseCard({ course, index }: CourseCardProps) {
-  const theme = themeStyles[courseThemeFor(course, index)];
+export default function CourseCard(props: CourseCardProps) {
+  const { index } = props;
+  const internship = props.internship;
+  const course = props.course;
+  const isInternship = internship !== undefined;
+  const theme = themeStyles[
+    courseThemeFor(
+      { card_theme: course?.card_theme ?? null },
+      index
+    )
+  ];
   const cardRef = useRef<HTMLElement>(null);
   const animationFrame = useRef<number | null>(null);
   const pendingPointer = useRef({ x: 0, y: 0 });
   const cardNumber = String(
-    course.display_order > 0 ? course.display_order : index + 1
+    course && course.display_order > 0 ? course.display_order : index + 1
   ).padStart(2, "0");
-  const trainingDuration =
-    course.course_type === "internship" ? "Not listed" : course.duration;
-  const internshipDuration =
-    course.course_type === "internship" ? course.duration : "Not listed";
+  const title = internship?.title ?? course?.title ?? "";
+  const slug = internship?.slug ?? course?.slug ?? "";
+  const description =
+    internship?.short_description ?? course?.short_description ?? "";
+  const duration = internship
+    ? `${internship.duration_months} month${internship.duration_months === 1 ? "" : "s"}`
+    : course?.duration ?? "";
+  const imageUrl = internship?.cover_image_url ?? course?.image_url ?? null;
+  const category = isInternship ? "Internship opportunity" : course?.category ?? "";
+
+  // Conditional internship check: safe Number conversion, must be > 0
+  const rawInternshipMonths = isInternship
+    ? null
+    : course?.internship_duration_months ?? course?.internship_period;
+  const parsedMonths =
+    rawInternshipMonths != null && !Number.isNaN(Number(rawInternshipMonths))
+      ? Number(rawInternshipMonths)
+      : 0;
+  const hasInternship = !isInternship && parsedMonths > 0;
+  const internshipDurationText = hasInternship
+    ? `${parsedMonths} Month${parsedMonths === 1 ? "" : "s"}*`
+    : "";
 
   function handlePointerMove(event: PointerEvent<HTMLElement>) {
     if (
@@ -138,20 +173,20 @@ export default function CourseCard({ course, index }: CourseCardProps) {
         <span className="text-[11px] font-bold tracking-[0.2em] text-white/55 sm:text-xs">
           W2S / {cardNumber}
         </span>
-        {course.is_featured ? (
+        {course?.is_featured ? (
           <span className="rounded-full border border-white/15 bg-white/[0.07] px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-white/80 sm:px-3.5 sm:py-2 sm:text-[10px]">
             Featured
           </span>
         ) : (
           <span className={`rounded-full px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider sm:px-3.5 sm:py-2 sm:text-[10px] ${theme.badge}`}>
-            {typeLabels[course.course_type]}
+            {isInternship ? "Internship" : typeLabels[course?.course_type ?? "course"]}
           </span>
         )}
       </div>
 
       <div className="relative z-10 mt-3.5 flex h-16 items-center sm:mt-6 sm:h-24">
         <CourseImage
-          alt={`${course.title} course`}
+          alt={`${title} ${isInternship ? "internship" : "course"}`}
           className="h-14 w-14 rounded-2xl border border-white/15 object-cover sm:h-20 sm:w-20 sm:rounded-[25px]"
           fallback={
             <div className={`w2s-course-icon flex h-14 w-14 items-center justify-center rounded-2xl sm:h-20 sm:w-20 sm:rounded-[25px] ${theme.icon}`}>
@@ -160,61 +195,93 @@ export default function CourseCard({ course, index }: CourseCardProps) {
               </span>
             </div>
           }
-          src={course.image_url}
+          src={imageUrl}
         />
       </div>
 
       <div className="relative z-10 mt-2 sm:mt-3">
         <span className={`text-[9px] font-bold uppercase tracking-[0.2em] sm:text-[10px] ${theme.accent}`}>
-          {course.category}
+          {category}
         </span>
         <h3 className={`mt-1.5 max-w-[310px] text-lg font-bold leading-tight tracking-tight text-white transition-colors duration-300 sm:mt-3 sm:text-2xl ${theme.hoverAccent}`}>
-          {course.title}
+          {title}
         </h3>
         <p className="mt-2 text-xs leading-5 text-white/65 sm:mt-3 sm:text-sm sm:leading-6">
-          {course.short_description}
+          {description}
         </p>
         <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-medium text-white/70 sm:text-xs">
-          <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1">
-            {course.level}
-          </span>
+          {course?.level && (
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1">
+              {course.level}
+            </span>
+          )}
+          {internship?.internship_type && (
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 capitalize">
+              {internship.internship_type}
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="relative z-10 mt-3.5 grid grid-cols-2 gap-2.5 sm:mt-5 sm:gap-3">
-        <div className={`rounded-xl border p-2.5 sm:p-3 ${theme.panel}`}>
-          <p className="text-[9px] uppercase tracking-wider text-white/45 sm:text-[10px]">
-            Training
-          </p>
-          <p className="mt-1 text-xs font-semibold text-white sm:mt-1.5 sm:text-sm">
-            {trainingDuration}
-          </p>
+      {hasInternship ? (
+        /* Course WITH Internship: Two equal-width cards side by side */
+        <div className="relative z-10 mt-3.5 grid grid-cols-1 min-[340px]:grid-cols-2 sm:grid-cols-2 gap-2.5 sm:mt-5 sm:gap-3">
+          <div className={`rounded-xl border p-2.5 sm:p-3 ${theme.panel}`}>
+            <p className="text-[9px] uppercase tracking-wider text-white/45 sm:text-[10px]">
+              TRAINING
+            </p>
+            <p className="mt-1 text-xs font-semibold text-white sm:mt-1.5 sm:text-sm">
+              {course?.duration}
+            </p>
+          </div>
+          <div className={`rounded-xl border p-2.5 sm:p-3 ${theme.internshipPanel}`}>
+            <p className={`text-[9px] uppercase tracking-wider sm:text-[10px] ${theme.accent}`}>
+              INTERNSHIP
+            </p>
+            <p className={`mt-1 text-xs font-semibold sm:mt-1.5 sm:text-sm ${theme.accent}`}>
+              {internshipDurationText}
+            </p>
+          </div>
         </div>
-        <div className={`rounded-xl border p-2.5 sm:p-3 ${theme.internshipPanel}`}>
-          <p className={`text-[9px] uppercase tracking-wider sm:text-[10px] ${theme.accent}`}>
-            Internship
-          </p>
-          <p className={`mt-1 text-xs font-semibold sm:mt-1.5 sm:text-sm ${theme.accent}`}>
-            {internshipDuration}
-          </p>
+      ) : (
+        /* Course WITHOUT Internship (or standalone Internship): Single full-width card */
+        <div className="relative z-10 mt-3.5 grid grid-cols-1 gap-2.5 sm:mt-5 sm:gap-3">
+          <div className={`rounded-xl border p-2.5 sm:p-3 ${theme.panel}`}>
+            <p className="text-[9px] uppercase tracking-wider text-white/45 sm:text-[10px]">
+              {isInternship ? "INTERNSHIP DURATION" : "TRAINING"}
+            </p>
+            <p className="mt-1 text-xs font-semibold text-white sm:mt-1.5 sm:text-sm">
+              {duration}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="relative z-10 mt-4 flex items-center justify-between gap-3 border-t border-white/10 pt-3.5 sm:mt-auto sm:pt-5">
         <Link
           className={`inline-flex min-h-[38px] items-center gap-1.5 text-xs font-semibold transition-colors duration-300 sm:text-sm ${theme.secondary}`}
-          href={`/courses/${course.slug}`}
+          href={isInternship ? `/internships/${slug}` : `/courses/${slug}`}
         >
-          View Programme
+          {isInternship ? "View Details" : "View Programme"}
           <span aria-hidden="true">↗</span>
         </Link>
-        <Link
-          className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#101820] sm:px-4 sm:py-2.5 sm:text-sm ${theme.action}`}
-          href={`/admissions?course=${encodeURIComponent(course.slug)}`}
-        >
-          Apply Now
-          <span aria-hidden="true">↗</span>
-        </Link>
+        {internship ? (
+          <Link
+            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#101820] sm:px-4 sm:py-2.5 sm:text-sm ${theme.action}`}
+            href={`/admissions?type=internship&internship=${encodeURIComponent(internship.slug)}`}
+          >
+            Enquire Now
+            <span aria-hidden="true">↗</span>
+          </Link>
+        ) : course ? (
+          <Link
+            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#101820] sm:px-4 sm:py-2.5 sm:text-sm ${theme.action}`}
+            href={`/admissions?course=${encodeURIComponent(course.slug)}`}
+          >
+            Apply Now
+            <span aria-hidden="true">↗</span>
+          </Link>
+        ) : null}
       </div>
       <div aria-hidden="true" className="w2s-course-accent absolute bottom-0 left-0 z-10 h-1 w-full" style={{ background: theme.accentColor }} />
     </article>

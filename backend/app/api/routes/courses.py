@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_session
 from app.models.course import Course
 from app.models.enums import CourseType
+from app.models.internship import Internship
 from app.schemas.course import CourseRead
+from app.schemas.internship import InternshipRead
 
 router = APIRouter()
 internships_router = APIRouter()
@@ -43,9 +45,30 @@ def get_course(
     return course
 
 
-@internships_router.get("", response_model=list[CourseRead])
-def list_internships(session: Session = Depends(get_session)) -> list[Course]:
-    return _published_courses(session, CourseType.INTERNSHIP)
+@internships_router.get("", response_model=list[InternshipRead])
+def list_internships(session: Session = Depends(get_session)) -> list[InternshipRead]:
+    return list(
+        session.scalars(
+            select(Internship)
+            .where(Internship.is_published.is_(True))
+            .order_by(Internship.created_at.desc(), Internship.id)
+        ).all()
+    )
+
+
+@internships_router.get("/{slug}", response_model=InternshipRead)
+def get_internship(
+    slug: Annotated[str, Path(min_length=2, max_length=180)],
+    session: Session = Depends(get_session),
+) -> Internship:
+    internship = session.scalar(
+        select(Internship).where(
+            Internship.slug == slug, Internship.is_published.is_(True)
+        )
+    )
+    if internship is None:
+        raise HTTPException(status_code=404, detail="Internship not found")
+    return internship
 
 
 @programmes_router.get("", response_model=list[CourseRead])
